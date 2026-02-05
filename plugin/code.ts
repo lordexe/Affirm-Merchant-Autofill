@@ -1,118 +1,204 @@
-figma.showUI(__html__, { width: 360, height: 520 });
+figma.showUI(__html__, { width: 360, height: 320 });
 
-type LookupResult = {
-  query: string;
-  name: string | null;
-  logoProxy: string | null;
-  heroProxy: string | null;
-  error?: string;
+type MerchantLookup = {
+  name: string;
+  logoUrl: string | null;
+  heroUrl: string | null;
 };
 
-async function postLookup(queries: string[]): Promise<LookupResult[]> {
-  const resp = await fetch("http://localhost:8787/lookup", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ queries }),
-  });
+type MerchantCardNodes = {
+  nameNode: TextNode | null;
+  logoNode: SceneNode | null;
+  heroNode: SceneNode | null;
+};
 
-  if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(`Local server error (${resp.status}): ${txt}`);
+const LOOKUP_ENDPOINT = "http://localhost:8787/lookup?name=";
+
+/**
+ * How to test:
+ * 1) cd server && USE_MOCK=true node index.js
+ * 2) In Figma, select the "Merchant Grid" frame with child "Merchant Card" items.
+ * 3) Run plugin, enter: Nike, Samsung, Macy's
+ * 4) Click Run; first N cards get updated with mock images and names.
+ */
+
+async function fetchLookup(name: string): Promise<MerchantLookup> {
+  const url = `${LOOKUP_ENDPOINT}${encodeURIComponent(name)}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Lookup failed (${response.status}) for ${name}`);
   }
-
-  const json = await resp.json();
-  return (json.results || []) as LookupResult[];
+  return (await response.json()) as MerchantLookup;
 }
 
-function findAllCards(grid: SceneNode): SceneNode[] {
-  if (!("findAll" in grid)) return [];
-  // find frames/groups/instances named "Merchant Card"
-  return (grid as any).findAll((n: SceneNode) => n.name === "Merchant Card") as SceneNode[];
+function parseMerchantNames(input: string): string[] {
+  return input
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
-function findOneByName(root: SceneNode, name: string): SceneNode | null {
-  if (!("findOne" in root)) return null;
-  return (root as any).findOne((n: SceneNode) => n.name === name) as SceneNode | null;
+function getMerchantCards(parent: SceneNode): SceneNode[] {
+  if (!("children" in parent)) return [];
+  return parent.children.filter((child) => child.name === "Merchant Card");
 }
 
-async function setText(node: SceneNode, value: string) {
-  if (node.type !== "TEXT") return;
+function findFirstByName(root: SceneNode, name: string): SceneNode | null {
+  if ("findOne" in root) {
+    return (root as ChildrenMixin).findOne((node) => node.name === name) as SceneNode | null;
+  }
+  return null;
+}
+
+function resolveCardNodes(card: SceneNode): MerchantCardNodes {
+  const nameNode = findFirstByName(card, "Merchant name");
+  const logoNode = findFirstByName(card, "image 162");
+  const heroNode = findFirstByName(card, "image 161");
+
+  return {
+    nameNode: nameNode?.type === "TEXT" ? nameNode : null,
+    logoNode,
+    heroNode,
+  };
+}
+
+async function setText(node: TextNode, value: string) {
   await figma.loadFontAsync(node.fontName as FontName);
   node.characters = value;
 }
 
-async function setImageFill(node: SceneNode, imageUrl: string) {
-  // We expect your targets ("image 161", "image 162") to be rectangles
-  // If they’re not, we’ll try to find a rectangle inside.
-  let target: SceneNode | null = node;
-
-  if (
-    (node.type === "FRAME" || node.type === "INSTANCE" || node.type === "COMPONENT") &&
-    "findOne" in node
-  ) {
-    const rect = (node as any).findOne((n: SceneNode) => n.type === "RECTANGLE") as SceneNode | null;
-    if (rect) target = rect;
-  }
-
-  if (!target || target.type !== "RECTANGLE") return;
-
-  const img = await figma.createImageAsync(imageUrl);
-  const paint: ImagePaint = { type: "IMAGE", imageHash: img.hash, scaleMode: "FILL" };
-
-  const fills = Array.isArray(target.fills) ? target.fills.slice() : [];
-  if (fills.length === 0) fills.push(paint);
-  else fills[0] = paint;
-
-  target.fills = fills;
+function supportsFills(node: SceneNode): node is GeometryMixin {
+  return "fills" in node;
 }
 
-async function populateGrid(results: LookupResult[]) {
-  const sel = figma.currentPage.selection;
-  if (sel.length !== 1) throw new Error("Select exactly one layer: Merchant Grid.");
-  const grid = sel[0];
-
-  const cards = findAllCards(grid);
-  if (cards.length === 0) throw new Error('No "Merchant Card" layers found under the selection.');
-
-  const count = Math.min(cards.length, results.length);
-
-  for (let i = 0; i < count; i++) {
-    const card = cards[i];
-    const r = results[i];
-    if (r.error) continue;
-
-    // Text: Content > Merchant name
-    const content = findOneByName(card, "Content");
-    const nameNode = content ? findOneByName(content, "Merchant name") : findOneByName(card, "Merchant name");
-    if (nameNode) await setText(nameNode, r.name || r.query);
-
-    // Logo: Merchant Logos > image 162
-    if (r.logoProxy) {
-      const logos = findOneByName(card, "Merchant Logos");
-      const logoTarget = logos ? findOneByName(logos, "image 162") : findOneByName(card, "image 162");
-      if (logoTarget) await setImageFill(logoTarget, r.logoProxy);
-    }
-
-    // Hero: image 161
-    if (r.heroProxy) {
-      const heroTarget = findOneByName(card, "image 161");
-      if (heroTarget) await setImageFill(heroTarget, r.heroProxy);
-    }
+async function loadImageBytes(url: string): Promise<Uint8Array> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Image fetch failed (${response.status})`);
   }
-
-  figma.notify(`Populated ${count} cards.`);
+  const buffer = await response.arrayBuffer();
+  return new Uint8Array(buffer);
 }
 
-figma.ui.onmessage = async (msg) => {
-  if (msg.type === "POPULATE") {
-    try {
-      const queries = (msg.queries || []) as string[];
-      const results = await postLookup(queries);
-      await populateGrid(results);
-      figma.ui.postMessage({ type: "DONE", results });
-    } catch (err: any) {
-      figma.ui.postMessage({ type: "ERROR", error: String(err?.message || err) });
-      figma.notify(`Error: ${String(err?.message || err)}`);
+async function setImageFill(node: SceneNode, url: string) {
+  if (!supportsFills(node)) {
+    console.warn(`Node ${node.name} does not support fills.`);
+    return;
+  }
+
+  const fills = Array.isArray(node.fills) ? [...node.fills] : [];
+  if (fills.length === 0) {
+    console.warn(`Node ${node.name} has no fills; skipping image update.`);
+    return;
+  }
+
+  const bytes = await loadImageBytes(url);
+  const image = figma.createImage(bytes);
+  const imagePaint: ImagePaint = {
+    type: "IMAGE",
+    imageHash: image.hash,
+    scaleMode: "FILL",
+  };
+
+  let replaced = false;
+  for (let i = 0; i < fills.length; i++) {
+    if (fills[i].type === "IMAGE" || fills[i].type === "SOLID") {
+      fills[i] = imagePaint;
+      replaced = true;
+      break;
     }
   }
-};
+
+  if (!replaced) {
+    fills[0] = imagePaint;
+  }
+
+  node.fills = fills;
+}
+
+async function populateCards(parent: SceneNode, merchants: MerchantLookup[]) {
+  const cards = getMerchantCards(parent);
+  if (cards.length === 0) {
+    figma.notify('No "Merchant Card" children found in the selection.');
+    return;
+  }
+
+  const count = Math.min(cards.length, merchants.length);
+  console.log(`Populating ${count} cards...`);
+
+  for (let index = 0; index < count; index += 1) {
+    const card = cards[index];
+    const merchant = merchants[index];
+    const { nameNode, logoNode, heroNode } = resolveCardNodes(card);
+
+    if (nameNode) {
+      await setText(nameNode, merchant.name || "");
+    } else {
+      console.warn(`Missing Merchant name node on card ${index + 1}`);
+    }
+
+    if (logoNode && merchant.logoUrl) {
+      try {
+        await setImageFill(logoNode, merchant.logoUrl);
+      } catch (error) {
+        console.warn(`Logo image failed for ${merchant.name}:`, error);
+      }
+    }
+
+    if (heroNode && merchant.heroUrl) {
+      try {
+        await setImageFill(heroNode, merchant.heroUrl);
+      } catch (error) {
+        console.warn(`Hero image failed for ${merchant.name}:`, error);
+      }
+    }
+  }
+
+  figma.notify(`Done: filled ${count} cards`);
+}
+
+figma.on("message", async (msg) => {
+  if (msg?.type !== "RUN_MERCHANT_AUTOFILL") return;
+
+  const payload = typeof msg.payload === "string" ? msg.payload : "";
+  const names = parseMerchantNames(payload);
+
+  if (names.length === 0) {
+    figma.notify("Please enter at least one merchant name.");
+    return;
+  }
+
+  const selection = figma.currentPage.selection;
+  if (selection.length !== 1) {
+    figma.notify("Select exactly one layer: Merchant Grid.");
+    return;
+  }
+
+  const parent = selection[0];
+  if (parent.type !== "FRAME" && parent.type !== "GROUP" && parent.type !== "COMPONENT") {
+    figma.notify("Selection must be a frame containing Merchant Cards.");
+    return;
+  }
+
+  figma.notify(`Looking up ${names.length} merchants...`);
+
+  try {
+    const merchants: MerchantLookup[] = [];
+    for (const name of names) {
+      try {
+        const result = await fetchLookup(name);
+        merchants.push(result);
+      } catch (error) {
+        console.warn(`Lookup failed for ${name}:`, error);
+        merchants.push({ name, logoUrl: null, heroUrl: null });
+      }
+    }
+
+    await populateCards(parent, merchants);
+  } catch (error) {
+    console.warn("Unexpected error:", error);
+    figma.notify("Something went wrong while filling cards.");
+  } finally {
+    figma.closePlugin();
+  }
+});
