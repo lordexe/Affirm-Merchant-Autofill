@@ -157,7 +157,7 @@ async function populateCards(parent: SceneNode, merchants: MerchantLookup[]) {
   figma.notify(`Done: filled ${count} cards`);
 }
 
-figma.on("message", async (msg) => {
+figma.ui.onmessage = async (msg) => {
   if (msg?.type !== "RUN_MERCHANT_AUTOFILL") return;
 
   const payload = typeof msg.payload === "string" ? msg.payload : "";
@@ -175,7 +175,11 @@ figma.on("message", async (msg) => {
   }
 
   const parent = selection[0];
-  if (parent.type !== "FRAME" && parent.type !== "GROUP" && parent.type !== "COMPONENT") {
+  if (
+    parent.type !== "FRAME" &&
+    parent.type !== "GROUP" &&
+    parent.type !== "COMPONENT"
+  ) {
     figma.notify("Selection must be a frame containing Merchant Cards.");
     return;
   }
@@ -183,7 +187,7 @@ figma.on("message", async (msg) => {
   figma.notify(`Looking up ${names.length} merchants...`);
 
   try {
-    const merchants: MerchantLookup[] = [];
+    const merchants = [];
     for (const name of names) {
       try {
         const result = await fetchLookup(name);
@@ -201,4 +205,4 @@ figma.on("message", async (msg) => {
   } finally {
     figma.closePlugin();
   }
-});
+};

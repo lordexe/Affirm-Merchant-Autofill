@@ -1,4 +1,4 @@
-const root = document.createElement("div");
+const root = document.getElementById("root") ?? document.createElement("div");
 root.style.fontFamily = "Inter, sans-serif";
 root.style.padding = "16px";
 root.style.display = "flex";
@@ -11,7 +11,9 @@ root.innerHTML = `
   <button id="run-button" style="padding: 8px 12px; font-size: 12px;">Run</button>
 `;
 
-document.body.appendChild(root);
+if (!root.parentElement) {
+  document.body.appendChild(root);
+}
 
 const input = document.getElementById("merchant-input") as HTMLTextAreaElement | null;
 const button = document.getElementById("run-button") as HTMLButtonElement | null;
