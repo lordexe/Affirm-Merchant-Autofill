@@ -1,0 +1,140 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial; padding: 12px; height: 100%; display: flex; flex-direction: column; box-sizing: border-box;}
+      label { font-size: 12px; font-weight: 600; display: block; margin-bottom: 6px; }
+      textarea, input { width: 100%; font-size: 12px; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+      textarea { height: 70px; resize: vertical; margin-bottom: 10px; }
+      .row { margin-bottom: 10px; }
+      button { padding: 8px 10px; font-size: 12px; cursor: pointer; background: #18A0FB; color: white; border: none; border-radius: 6px; }
+      button#close { background: white; color: #333; border: 1px solid #ccc; margin-left: 8px;}
+      .actions { display: flex; align-items: center; margin-bottom: 12px; }
+      .hint { font-size: 11px; color: #777; line-height: 1.35; margin-top: 4px; margin-bottom: 8px; }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background: #f0f0f0; padding: 2px 4px; border-radius: 3px; }
+
+      /* Status Area */
+      #status-list {
+        flex: 1;
+        overflow-y: auto;
+        border: 1px solid #e5e5e5;
+        border-radius: 4px;
+        padding: 8px;
+        background: #fafafa;
+        font-size: 11px;
+        color: #333;
+        min-height: 100px;
+      }
+      .status-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 4px 0;
+        border-bottom: 1px solid #eee;
+      }
+      .status-item:last-child { border-bottom: none; }
+      .status-name { font-weight: 600; }
+      .status-val { color: #666; }
+      .status-val.error { color: #d32f2f; }
+      .status-val.done { color: #2e7d32; }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <label>Merchant names (comma-separated)</label>
+      <textarea id="merchants" placeholder="Dell, Puma, Nike"></textarea>
+    </div>
+
+    <div class="row">
+      <label>Server base URL</label>
+      <input id="serverBase" value="http://localhost:8787" />
+    </div>
+
+    <div class="actions">
+      <button id="run">Run Lookup</button>
+      <button id="close">Close</button>
+    </div>
+    
+    <label>Status Log</label>
+    <div id="status-list">
+      <div style="color:#999; text-align:center; padding-top:20px;">Ready to run...</div>
+    </div>
+
+    <script>
+      const merchantsEl = document.getElementById("merchants");
+      const serverBaseEl = document.getElementById("serverBase");
+      const statusListEl = document.getElementById("status-list");
+
+      // Store statuses so we can update them in place
+      const statusMap = new Map();
+
+      function updateStatus(name, status) {
+        // If this is the first time seeing this merchant in this run, create the row
+        if (!statusMap.has(name)) {
+            const row = document.createElement("div");
+            row.className = "status-item";
+            
+            const nameSpan = document.createElement("span");
+            nameSpan.className = "status-name";
+            nameSpan.innerText = name;
+            
+            const valSpan = document.createElement("span");
+            valSpan.className = "status-val";
+            valSpan.innerText = "Pending...";
+
+            row.appendChild(nameSpan);
+            row.appendChild(valSpan);
+            statusListEl.appendChild(row);
+            
+            statusMap.set(name, valSpan);
+        }
+
+        const el = statusMap.get(name);
+        el.innerText = status;
+        
+        // Simple color coding
+        el.className = "status-val"; // reset
+        if (status.includes("Done")) el.classList.add("done");
+        if (status.includes("Error") || status.includes("fail")) el.classList.add("error");
+        
+        // Auto scroll to bottom
+        statusListEl.scrollTop = statusListEl.scrollHeight;
+      }
+
+      // Listen for messages from code.js
+      window.onmessage = (event) => {
+        const msg = event.data.pluginMessage;
+        if (!msg) return;
+
+        if (msg.type === "STATUS") {
+          updateStatus(msg.name, msg.status);
+        }
+      };
+
+      document.getElementById("run").onclick = () => {
+        const merchants = merchantsEl.value
+          .split(",")
+          .map(s => s.trim())
+          .filter(Boolean);
+
+        if (merchants.length === 0) return;
+
+        // Clear previous run
+        statusListEl.innerHTML = "";
+        statusMap.clear();
+
+        // Pre-fill list with "Waiting..."
+        merchants.forEach(m => updateStatus(m, "Waiting..."));
+
+        parent.postMessage(
+          { pluginMessage: { type: "RUN", merchants, serverBase: serverBaseEl.value.trim() } },
+          "*"
+        );
+      };
+
+      document.getElementById("close").onclick = () => {
+        parent.postMessage({ pluginMessage: { type: "CLOSE" } }, "*");
+      };
+    </script>
+  </body>
+</html>
