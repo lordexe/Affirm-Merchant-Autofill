@@ -3,138 +3,428 @@
   <head>
     <meta charset="utf-8" />
     <style>
-      body { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial; padding: 12px; height: 100%; display: flex; flex-direction: column; box-sizing: border-box;}
-      label { font-size: 12px; font-weight: 600; display: block; margin-bottom: 6px; }
-      textarea, input { width: 100%; font-size: 12px; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
-      textarea { height: 70px; resize: vertical; margin-bottom: 10px; }
-      .row { margin-bottom: 10px; }
-      button { padding: 8px 10px; font-size: 12px; cursor: pointer; background: #18A0FB; color: white; border: none; border-radius: 6px; }
-      button#close { background: white; color: #333; border: 1px solid #ccc; margin-left: 8px;}
-      .actions { display: flex; align-items: center; margin-bottom: 12px; }
-      .hint { font-size: 11px; color: #777; line-height: 1.35; margin-top: 4px; margin-bottom: 8px; }
-      code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background: #f0f0f0; padding: 2px 4px; border-radius: 3px; }
-
-      /* Status Area */
-      #status-list {
-        flex: 1;
-        overflow-y: auto;
-        border: 1px solid #e5e5e5;
-        border-radius: 4px;
-        padding: 8px;
-        background: #fafafa;
-        font-size: 11px;
+      body { 
+        font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+        padding: 16px; 
+        margin: 0;
+        box-sizing: border-box; 
         color: #333;
-        min-height: 100px;
+        display: flex; 
+        flex-direction: column; 
+        height: 100vh;
       }
-      .status-item {
+
+      /* Label style */
+      .input-label {
+        font-size: 11px;
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 6px;
+        display: block;
+      }
+
+      /* --- Tag Input Container --- */
+      .tag-container {
         display: flex;
-        justify-content: space-between;
-        padding: 4px 0;
-        border-bottom: 1px solid #eee;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 8px;
+        border: 1px solid #e1e1e1;
+        border-radius: 6px;
+        background: #fff;
+        min-height: 80px;
+        cursor: text;
+        transition: border-color 0.2s;
+        align-content: flex-start;
+        position: relative; /* For Clear button positioning */
       }
-      .status-item:last-child { border-bottom: none; }
-      .status-name { font-weight: 600; }
-      .status-val { color: #666; }
-      .status-val.error { color: #d32f2f; }
-      .status-val.done { color: #2e7d32; }
+      .tag-container:focus-within {
+        border-color: #18A0FB;
+        outline: 2px solid rgba(24, 160, 251, 0.2);
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        background: #f0f0f0;
+        border-radius: 4px;
+        padding: 4px 8px;
+        font-size: 12px;
+        font-weight: 500;
+        color: #333;
+        user-select: none;
+        transition: all 0.2s ease;
+        max-width: 100%;
+      }
+
+      /* Status states for tags */
+      .tag.loading { background: #e3f2fd; color: #0d47a1; }
+      .tag.done { background: #e8f5e9; color: #1b5e20; }
+      .tag.error { background: #ffebee; color: #c62828; cursor: help; }
+      .tag.skipped { background: #f5f5f5; color: #999; opacity: 0.7; text-decoration: line-through; }
+
+      .tag-icon {
+        width: 12px;
+        height: 12px;
+        margin-right: 6px;
+        display: none; 
+      }
+      
+      @keyframes spin { 100% { transform: rotate(360deg); } }
+      .icon-spinner {
+        border: 2px solid rgba(13, 71, 161, 0.2);
+        border-top-color: #0d47a1;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+
+      .tag.loading .icon-spinner { display: block; }
+      .tag.done .icon-check { display: block; }
+      .tag.error .icon-x { display: block; }
+
+      #input-field {
+        border: none;
+        outline: none;
+        flex: 1;
+        min-width: 60px;
+        font-size: 12px;
+        padding: 4px 0;
+        color: #333;
+        font-family: inherit;
+        background: transparent;
+      }
+
+      /* Clear button inside container */
+      #clear-btn {
+        position: absolute;
+        bottom: 6px;
+        right: 8px;
+        font-size: 11px;
+        color: #999;
+        cursor: pointer;
+        text-decoration: underline;
+        background: none;
+        border: none;
+        padding: 0;
+        display: none; /* Hidden by default */
+      }
+      #clear-btn:hover { color: #d32f2f; }
+      #clear-btn.visible { display: block; }
+
+      /* --- Controls Row --- */
+      .controls {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      button#run {
+        flex: 1;
+        background: #18A0FB;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        height: 32px;
+        font-weight: 600;
+        font-size: 12px;
+        cursor: pointer;
+        transition: background 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      button#run:hover { background: #0d8de3; }
+      button#run:disabled { background: #ccc; cursor: default; }
+      button#run.error-state { background: #e57373; }
+
+      button#setup {
+        width: 32px;
+        height: 32px;
+        background: transparent;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #555;
+      }
+      button#setup:hover { background: #f5f5f5; color: #333; }
+      button#setup svg { width: 16px; height: 16px; }
+
+      /* --- Settings Panel --- */
+      #settings-panel {
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid #eee;
+        display: none; 
+      }
+      #settings-panel.visible { display: block; }
+      
+      .settings-label { font-size: 11px; font-weight: 600; color: #888; margin-bottom: 4px; display: block; }
+      #serverBase {
+        width: 100%;
+        padding: 6px 8px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 12px;
+        font-family: "Inter", sans-serif;
+        box-sizing: border-box;
+      }
+
+      .run-text { margin: 0 4px; }
     </style>
   </head>
   <body>
-    <div class="row">
-      <label>Merchant names (comma-separated)</label>
-      <textarea id="merchants" placeholder="Dell, Puma, Nike"></textarea>
+
+    <span class="input-label">Merchant names (comma separated)</span>
+
+    <div class="tag-container" id="tag-wrapper">
+      <input id="input-field" placeholder="e.g. Nike, Puma" autocomplete="off" />
+      <button id="clear-btn">Clear</button>
     </div>
 
-    <div class="row">
-      <label>Server base URL</label>
-      <input id="serverBase" value="http://localhost:8787" />
+    <div class="controls">
+      <button id="run"><span class="run-text">Run</span></button>
+      <button id="setup" title="Settings">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
     </div>
 
-    <div class="actions">
-      <button id="run">Run Lookup</button>
-      <button id="close">Close</button>
-    </div>
-    
-    <label>Status Log</label>
-    <div id="status-list">
-      <div style="color:#999; text-align:center; padding-top:20px;">Ready to run...</div>
+    <div id="settings-panel">
+      <span class="settings-label">Server URL</span>
+      <input id="serverBase" value="http://localhost:8787" placeholder="http://localhost:8787" />
     </div>
 
     <script>
-      const merchantsEl = document.getElementById("merchants");
-      const serverBaseEl = document.getElementById("serverBase");
-      const statusListEl = document.getElementById("status-list");
+      const tagWrapper = document.getElementById('tag-wrapper');
+      const inputField = document.getElementById('input-field');
+      const clearBtn = document.getElementById('clear-btn');
+      const runBtn = document.getElementById('run');
+      const setupBtn = document.getElementById('setup');
+      const settingsPanel = document.getElementById('settings-panel');
+      const serverBaseEl = document.getElementById('serverBase');
+      const runText = runBtn.querySelector('.run-text');
 
-      // Store statuses so we can update them in place
-      const statusMap = new Map();
+      let tags = [];
+      let isRunning = false;
 
-      function updateStatus(name, status) {
-        // If this is the first time seeing this merchant in this run, create the row
-        if (!statusMap.has(name)) {
-            const row = document.createElement("div");
-            row.className = "status-item";
-            
-            const nameSpan = document.createElement("span");
-            nameSpan.className = "status-name";
-            nameSpan.innerText = name;
-            
-            const valSpan = document.createElement("span");
-            valSpan.className = "status-val";
-            valSpan.innerText = "Pending...";
-
-            row.appendChild(nameSpan);
-            row.appendChild(valSpan);
-            statusListEl.appendChild(row);
-            
-            statusMap.set(name, valSpan);
+      function updateUIState() {
+        // Toggle Clear button visibility
+        if (tags.length > 0 && !isRunning) {
+          clearBtn.classList.add('visible');
+        } else {
+          clearBtn.classList.remove('visible');
         }
 
-        const el = statusMap.get(name);
-        el.innerText = status;
-        
-        // Simple color coding
-        el.className = "status-val"; // reset
-        if (status.includes("Done")) el.classList.add("done");
-        if (status.includes("Error") || status.includes("fail")) el.classList.add("error");
-        
-        // Auto scroll to bottom
-        statusListEl.scrollTop = statusListEl.scrollHeight;
+        // Toggle Placeholder Visibility
+        if (tags.length > 0 || inputField.value.length > 0) {
+          inputField.removeAttribute('placeholder');
+        } else {
+          inputField.setAttribute('placeholder', 'e.g. Nike, Puma');
+        }
       }
 
-      // Listen for messages from code.js
+      function renderTags() {
+        const existingTags = tagWrapper.querySelectorAll('.tag');
+        existingTags.forEach(t => t.remove());
+
+        tags.forEach((tagText, index) => {
+          const tagEl = document.createElement('div');
+          tagEl.className = 'tag';
+          tagEl.dataset.index = index;
+          tagEl.innerHTML = `
+            <div class="tag-icon icon-spinner"></div>
+            <svg class="tag-icon icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            <svg class="tag-icon icon-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            <span>${tagText}</span>
+          `;
+          tagWrapper.insertBefore(tagEl, inputField);
+        });
+
+        updateUIState();
+      }
+
+      function addTag(text) {
+        // Remove commas, trim spaces
+        const clean = text.replace(/,/g, '').trim();
+        if (clean) {
+          tags.push(clean);
+          renderTags();
+        }
+        inputField.value = '';
+        updateUIState();
+      }
+
+      function removeLastTag() {
+        if (tags.length > 0) {
+          const last = tags.pop();
+          renderTags();
+          return last;
+        }
+        return null;
+      }
+
+      // --- Clear Button Logic ---
+      clearBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        tags = [];
+        inputField.value = '';
+        renderTags();
+        inputField.focus();
+      });
+
+      // --- PASTE LOGIC (NEW) ---
+      inputField.addEventListener('paste', (e) => {
+        if (isRunning) { e.preventDefault(); return; }
+        
+        // Stop default paste (which would just put text in input)
+        e.preventDefault();
+        
+        // Get text from clipboard
+        const paste = (e.clipboardData || window.clipboardData).getData('text');
+        
+        // Split by comma
+        const items = paste.split(',');
+        
+        // Add each as a tag
+        items.forEach(item => {
+            if (item.trim()) addTag(item);
+        });
+      });
+
+      // --- Input Event Listeners ---
+      inputField.addEventListener('keydown', (e) => {
+        if (isRunning) { e.preventDefault(); return; }
+
+        if (e.key === 'Enter' || e.key === ',') {
+          e.preventDefault();
+          addTag(inputField.value);
+        } else if (e.key === 'Backspace' && inputField.value === '') {
+          e.preventDefault();
+          const lastText = removeLastTag();
+          if (lastText) {
+            inputField.value = lastText;
+            updateUIState();
+          }
+        }
+      });
+
+      inputField.addEventListener('input', () => {
+        if (inputField.value.startsWith(' ')) {
+           inputField.value = inputField.value.trimStart();
+        }
+        updateUIState();
+      });
+
+      inputField.addEventListener('blur', () => {
+        if (!isRunning && inputField.value.trim()) {
+          addTag(inputField.value);
+        }
+      });
+
+      tagWrapper.addEventListener('click', (e) => {
+        if (e.target === tagWrapper || e.target === inputField) {
+           inputField.focus();
+        }
+      });
+
+      setupBtn.addEventListener('click', () => {
+        settingsPanel.classList.toggle('visible');
+        if (settingsPanel.classList.contains('visible')) {
+            serverBaseEl.focus();
+        }
+      });
+
+      runBtn.addEventListener('click', () => {
+        if (inputField.value.trim()) addTag(inputField.value);
+        if (tags.length === 0) return;
+        startRun();
+        parent.postMessage(
+          { pluginMessage: { type: "RUN", merchants: tags, serverBase: serverBaseEl.value.trim() } },
+          "*"
+        );
+      });
+
+      function startRun() {
+        isRunning = true;
+        inputField.disabled = true;
+        runBtn.disabled = true;
+        clearBtn.classList.remove('visible'); 
+        runText.innerText = "Running...";
+        runBtn.classList.remove('error-state');
+        
+        document.querySelectorAll('.tag').forEach(t => {
+            t.className = 'tag'; 
+            t.removeAttribute('title');
+        });
+      }
+
+      function finishRun(errorCount) {
+        if (errorCount > 0) {
+            runText.innerText = `Finished (${errorCount} errors)`;
+            runBtn.classList.add('error-state');
+        } else {
+            runText.innerText = "Finished Populating";
+        }
+        
+        setTimeout(() => {
+          isRunning = false;
+          inputField.disabled = false;
+          runBtn.disabled = false;
+          runText.innerText = "Run";
+          runBtn.classList.remove('error-state');
+          
+          document.querySelectorAll('.tag').forEach(t => {
+            t.className = 'tag';
+            t.removeAttribute('title');
+          });
+          
+          updateUIState();
+          inputField.focus();
+        }, 2000);
+      }
+
+      function updateTagStatus(index, status, errorMsg) {
+        const tagEl = tagWrapper.querySelector(`.tag[data-index="${index}"]`);
+        if (!tagEl) return;
+
+        tagEl.className = 'tag'; 
+
+        if (status === 'fetching' || status === 'populating') {
+          tagEl.classList.add('loading');
+        } else if (status === 'done') {
+          tagEl.classList.add('done');
+        } else if (status === 'error') {
+          tagEl.classList.add('error');
+          tagEl.title = errorMsg || "Unknown Error"; 
+        } else if (status === 'skipped') {
+          tagEl.classList.add('skipped');
+          tagEl.title = "Skipped (No available card)";
+        }
+      }
+
       window.onmessage = (event) => {
         const msg = event.data.pluginMessage;
         if (!msg) return;
 
         if (msg.type === "STATUS") {
-          updateStatus(msg.name, msg.status);
+            const map = {
+                'FETCH': 'fetching',
+                'POPULATE': 'populating',
+                'DONE': 'done',
+                'ERROR': 'error',
+                'SKIPPED': 'skipped'
+            };
+            updateTagStatus(msg.index, map[msg.code], msg.error);
+        }
+
+        if (msg.type === "COMPLETE") {
+            finishRun(msg.errorCount || 0);
         }
       };
-
-      document.getElementById("run").onclick = () => {
-        const merchants = merchantsEl.value
-          .split(",")
-          .map(s => s.trim())
-          .filter(Boolean);
-
-        if (merchants.length === 0) return;
-
-        // Clear previous run
-        statusListEl.innerHTML = "";
-        statusMap.clear();
-
-        // Pre-fill list with "Waiting..."
-        merchants.forEach(m => updateStatus(m, "Waiting..."));
-
-        parent.postMessage(
-          { pluginMessage: { type: "RUN", merchants, serverBase: serverBaseEl.value.trim() } },
-          "*"
-        );
-      };
-
-      document.getElementById("close").onclick = () => {
-        parent.postMessage({ pluginMessage: { type: "CLOSE" } }, "*");
-      };
+      
+      updateUIState();
     </script>
   </body>
 </html>

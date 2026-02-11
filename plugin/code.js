@@ -1,189 +1,203 @@
 // plugin/code.js
-figma.showUI(__html__, { width: 360, height: 400 }); // Increased height for status log
+figma.showUI(__html__, { width: 340, height: 200 });
 
 figma.ui.onmessage = async (msg) => {
   if (!msg || !msg.type) return;
 
   if (msg.type === "RUN") {
-    const serverBase = (msg.serverBase || "http://localhost:8787").replace(/\/$/, "");
-    const merchantNames = Array.isArray(msg.merchants)
-      ? msg.merchants.map((s) => String(s).trim()).filter(Boolean)
+    let serverRaw = (msg.serverBase || "http://localhost:8787").trim();
+    if (!serverRaw.startsWith("http")) serverRaw = `http://${serverRaw}`;
+    const serverBase = serverRaw.replace(/\/$/, "");
+
+    const merchantNames = Array.isArray(msg.merchants) 
+      ? msg.merchants.map(s => String(s).trim())
       : [];
 
-    if (merchantNames.length === 0) {
-      figma.notify("Enter at least one merchant name.");
-      return;
-    }
+    console.log("🚀 Run started with merchants:", merchantNames);
 
+    // 1. CAPTURE SELECTION
     const selection = figma.currentPage.selection;
-    if (selection.length !== 1) {
-      figma.notify("Select exactly one layer: the Merchant Grid frame/group.");
-      return;
+    console.log("📍 Selection count:", selection.length);
+
+    // 2. FIND CARDS (Ensuring we don't treat the Grid as a Card)
+    const availableCards = findMerchantCardsInSelection(selection);
+    console.log("🗂️ Identified Cards:", availableCards.map(c => `${c.name} (${c.id})`));
+
+    const isCreationMode = availableCards.length === 0;
+
+    if (isCreationMode) {
+      figma.notify(`Creating ${merchantNames.length} new cards...`);
+    } else {
+      figma.notify(`Updating ${Math.min(merchantNames.length, availableCards.length)} cards...`);
     }
 
-    const grid = selection[0];
-    if (!grid || typeof grid.findAll !== "function") {
-      figma.notify("Selection must be a frame/group/component with children.");
-      return;
-    }
-
-    // ✅ Find REAL merchant cards
-    const cards = findMerchantCards(grid);
-
-    if (cards.length === 0) {
-      figma.notify('No cards found. I looked for nodes containing "Logo", "Hero", and "Merchant name".');
-      return;
-    }
-
-    figma.notify(`Found ${cards.length} card(s). Starting...`);
-
-    // Process sequentially (One by one)
-    const count = Math.min(cards.length, merchantNames.length);
-
-    for (let i = 0; i < count; i++) {
+    let errorCount = 0;
+    let createdNodes = [];
+    
+    for (let i = 0; i < merchantNames.length; i++) {
       const merchantName = merchantNames[i];
-      const card = cards[i];
+      
+      if (!isCreationMode && i >= availableCards.length) {
+        console.log(`⚠️ Skipping "${merchantName}" - No card at index ${i}`);
+        figma.ui.postMessage({ type: "STATUS", index: i, code: "SKIPPED" });
+        continue;
+      }
 
-      // 1. Tell UI we are fetching
-      figma.ui.postMessage({ type: "STATUS", name: merchantName, status: "Fetching..." });
+      figma.ui.postMessage({ type: "STATUS", index: i, code: "FETCH" });
 
       try {
-        // Fetch
         const url = `${serverBase}/lookup?name=${encodeURIComponent(merchantName)}`;
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
-        // 2. Tell UI we are populating
-        figma.ui.postMessage({ type: "STATUS", name: merchantName, status: "Populating..." });
+        figma.ui.postMessage({ type: "STATUS", index: i, code: "POPULATE" });
 
-        // Populate logic
-        const logoNode = findFirstByName(card, "Logo");
-        const heroNode = findFirstByName(card, "Hero");
-        const nameTextNode = findFirstByNameCI(card, "Merchant name");
-
-        // Set Text
-        if (nameTextNode && nameTextNode.type === "TEXT") {
-          const nextName = data.name || merchantName;
-          await loadAllFontsForTextNode(nameTextNode);
-          nameTextNode.characters = nextName;
+        if (isCreationMode) {
+            const newCard = await createMerchantCard(data, merchantName, i);
+            createdNodes.push(newCard);
+        } else {
+            const targetCard = availableCards[i];
+            console.log(`✏️ Updating Card [${i}]: ${targetCard.name}`);
+            await populateCard(targetCard, data, merchantName);
         }
 
-        // Set Logo
-        if (logoNode && data.logoUrl) {
-          await setNodeImageFill(logoNode, data.logoUrl);
-        }
-
-        // Set Hero
-        if (heroNode && data.heroUrl) {
-          await setNodeImageFill(heroNode, data.heroUrl);
-        }
-
-        // 3. Success
-        figma.ui.postMessage({ type: "STATUS", name: merchantName, status: "✅ Done" });
-
+        figma.ui.postMessage({ type: "STATUS", index: i, code: "DONE" });
       } catch (e) {
-        console.error("Fetch failed:", e);
-        // 4. Error
-        figma.ui.postMessage({ type: "STATUS", name: merchantName, status: `❌ Error: ${e.message}` });
+        errorCount++;
+        console.error(`❌ Error for "${merchantName}":`, e.message);
+        figma.ui.postMessage({ type: "STATUS", index: i, code: "ERROR", error: e.message });
       }
     }
 
-    figma.notify("Batch complete.");
-    return;
-  }
-
-  if (msg.type === "CLOSE") {
-    figma.closePlugin();
+    if (createdNodes.length > 0) {
+        figma.currentPage.selection = createdNodes;
+        figma.viewport.scrollAndZoomIntoView(createdNodes);
+    }
+    figma.ui.postMessage({ type: "COMPLETE", errorCount });
   }
 };
 
-// -------- helpers (same as before) --------
+// ==========================================
+//              LOGIC HELPERS
+// ==========================================
 
-function findMerchantCards(root) {
-  const candidates = root.findAll((n) => {
-    if (typeof n.findAll !== "function") return false;
-    const hasLogo = n.findAll((x) => x.name === "Logo").length > 0;
-    const hasHero = n.findAll((x) => x.name === "Hero").length > 0;
-    const hasMerchantNameText = n.findAll(
-        (x) => x.type === "TEXT" && typeof x.name === "string" && x.name.toLowerCase() === "merchant name"
-      ).length > 0;
-    return hasLogo && hasHero && hasMerchantNameText;
-  });
+function findMerchantCardsInSelection(nodes) {
+  if (!nodes || nodes.length === 0) return [];
+  let results = [];
 
-  const cards = candidates.filter((node) => {
-    return !candidates.some((other) => other !== node && isDescendant(other, node));
-  });
+  for (const node of nodes) {
+    // FIX: Only treat as a card if it's named "Merchant Card" OR it has the specific layers
+    // and is NOT named "Merchant Grid"
+    const nameMatch = node.name.toLowerCase().includes("card");
+    const isGrid = node.name.toLowerCase().includes("grid");
 
-  cards.sort((a, b) => {
+    if (isMerchantCard(node) && !isGrid) {
+      results.push(node);
+    } else if ("children" in node) {
+      // If it's a grid, look inside for the actual cards
+      results = results.concat(findMerchantCardsInSelection(node.children));
+    }
+  }
+  return sortNodesByPosition(results);
+}
+
+function isMerchantCard(node) {
+  if (!node || typeof node.findAll !== "function") return false;
+  
+  // A card must have these layers as NEAR children, not buried deep in another card
+  const hasLogo = node.findAll(n => n.name === "Logo").length > 0;
+  const hasHero = node.findAll(n => n.name === "Hero").length > 0;
+  
+  // If the node's name contains "Grid", don't treat it as a single card
+  if (node.name.toLowerCase().includes("grid")) return false;
+
+  return hasLogo && hasHero;
+}
+
+async function populateCard(card, data, fallbackName) {
+    // Search strictly within THIS card
+    const logoNode = card.findAll(n => n.name === "Logo")[0];
+    const heroNode = card.findAll(n => n.name === "Hero")[0];
+    
+    // Find the text layer
+    const nameTextNode = card.findAll(n => 
+      n.type === "TEXT" && 
+      (n.name.toLowerCase().includes("name") || n.name === "Merchant name")
+    )[0] || card.findAll(n => n.type === "TEXT" && n.name !== "Logo" && n.name !== "Hero")[0];
+
+    if (nameTextNode) {
+        await loadAllFontsForTextNode(nameTextNode);
+        nameTextNode.characters = data.name || fallbackName;
+    }
+    
+    if (logoNode && data.logoUrl) await setNodeImageFill(logoNode, data.logoUrl);
+    if (heroNode && data.heroUrl) await setNodeImageFill(heroNode, data.heroUrl);
+}
+
+async function createMerchantCard(data, fallbackName, index) {
+  const frame = figma.createFrame();
+  frame.name = "Merchant Card";
+  frame.resize(232, 340);
+  frame.layoutMode = "VERTICAL";
+  frame.primaryAxisSizingMode = "AUTO";
+  frame.paddingLeft = 16; frame.paddingRight = 16; frame.paddingTop = 16; frame.paddingBottom = 16;
+  frame.itemSpacing = 12;
+  frame.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
+  
+  const col = index % 4;
+  const row = Math.floor(index / 4);
+  frame.x = figma.viewport.center.x + (col * 256);
+  frame.y = figma.viewport.center.y + (row * 380);
+
+  const hero = figma.createRectangle();
+  hero.name = "Hero";
+  hero.resize(200, 200);
+  hero.layoutAlign = "STRETCH";
+  if (data.heroUrl) await setNodeImageFill(hero, data.heroUrl);
+  frame.appendChild(hero);
+
+  const logo = figma.createRectangle();
+  logo.name = "Logo";
+  logo.resize(50, 50);
+  if (data.logoUrl) await setNodeImageFill(logo, data.logoUrl);
+  frame.appendChild(logo);
+
+  const text = figma.createText();
+  text.name = "Merchant name";
+  await figma.loadFontAsync({ family: "Inter", style: "Regular" });
+  text.characters = data.name || fallbackName;
+  frame.appendChild(text);
+
+  return frame;
+}
+
+function sortNodesByPosition(nodes) {
+  return nodes.sort((a, b) => {
     const ay = a.absoluteTransform[1][2];
     const by = b.absoluteTransform[1][2];
-    if (Math.abs(ay - by) > 1) return ay - by;
     const ax = a.absoluteTransform[0][2];
     const bx = b.absoluteTransform[0][2];
+    if (Math.abs(ay - by) > 15) return ay - by;
     return ax - bx;
   });
-
-  return cards;
-}
-
-function isDescendant(node, ancestor) {
-  let p = node.parent;
-  while (p) {
-    if (p === ancestor) return true;
-    p = p.parent;
-  }
-  return false;
-}
-
-function findFirstByName(root, name) {
-  if (!root || typeof root.findAll !== "function") return null;
-  const found = root.findAll((n) => n.name === name);
-  return found && found.length ? found[0] : null;
-}
-
-function findFirstByNameCI(root, name) {
-  if (!root || typeof root.findAll !== "function") return null;
-  const target = String(name || "").toLowerCase();
-  const found = root.findAll((n) => String(n.name || "").toLowerCase() === target);
-  return found && found.length ? found[0] : null;
 }
 
 async function loadAllFontsForTextNode(textNode) {
-  if (!textNode || textNode.type !== "TEXT") return;
   if (textNode.fontName !== figma.mixed) {
     await figma.loadFontAsync(textNode.fontName);
-    return;
-  }
-  const len = textNode.characters.length;
-  const seen = new Set();
-  for (let i = 0; i < len; i++) {
-    const font = textNode.getRangeFontName(i, i + 1);
-    const key = `${font.family}::${font.style}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      await figma.loadFontAsync(font);
+  } else {
+    const len = textNode.characters.length;
+    for (let i = 0; i < len; i++) {
+      await figma.loadFontAsync(textNode.getRangeFontName(i, i + 1));
     }
   }
 }
 
 async function setNodeImageFill(node, imageUrl) {
-  if (!node || !("fills" in node)) return;
-  const bytes = await fetchImageBytes(imageUrl);
-  const image = figma.createImage(bytes);
-  const newFill = {
-    type: "IMAGE",
-    imageHash: image.hash,
-    scaleMode: "FILL",
-  };
-  const currentFills = Array.isArray(node.fills) ? node.fills : [];
-  const nextFills = currentFills.filter((p) => p.type !== "IMAGE").concat([newFill]);
-  node.fills = nextFills;
-}
-
-async function fetchImageBytes(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Image fetch failed: ${res.status}`);
-  const arrayBuf = await res.arrayBuffer();
-  return new Uint8Array(arrayBuf);
+  try {
+    const bytes = await fetch(imageUrl).then(res => res.arrayBuffer());
+    const image = figma.createImage(new Uint8Array(bytes));
+    node.fills = [{ type: "IMAGE", imageHash: image.hash, scaleMode: "FILL" }];
+  } catch (e) { console.error("Fill Error:", e); }
 }
