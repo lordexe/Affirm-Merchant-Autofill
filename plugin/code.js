@@ -1,5 +1,5 @@
 // plugin/code.js
-figma.showUI(__html__, { width: 340, height: 200 });
+figma.showUI(__html__, { width: 340, height: 220 });
 
 figma.ui.onmessage = async (msg) => {
   if (!msg || !msg.type) return;

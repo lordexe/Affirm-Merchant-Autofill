@@ -150,9 +150,26 @@ const TTL_MS = 12 * 60 * 60 * 1000;
 
 let sharedBrowser = null;
 
+/**
+ * UPDATED: Robust Playwright launch for packaged Mac binary.
+ * Points to the system Chrome to avoid heavy downloads.
+ */
 async function getBrowser() {
   if (sharedBrowser) return sharedBrowser;
-  sharedBrowser = await chromium.launch({ headless: true });
+  
+  const macChromePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  
+  try {
+    sharedBrowser = await chromium.launch({ 
+      headless: true,
+      executablePath: macChromePath
+    });
+    if (DEBUG) console.log("✅ Playwright launched using system Chrome");
+  } catch (err) {
+    console.warn("⚠️ System Chrome not found at standard path, attempting default launch...");
+    sharedBrowser = await chromium.launch({ headless: true });
+  }
+  
   return sharedBrowser;
 }
 
@@ -160,22 +177,12 @@ function isFresh(entry) {
   return entry && Date.now() - entry.ts < TTL_MS;
 }
 
-/**
- * FIXED: Now accepts both 'cdn-assets.affirm.com' AND 'cdn1.affirm.com'
- */
 function isPromoImageUrl(u) {
   if (typeof u !== "string") return false;
-  
-  // Must be on one of the known Affirm CDN domains
   const isCdn = u.includes("cdn-assets.affirm.com") || u.includes("cdn1.affirm.com");
   if (!isCdn) return false;
-  
-  // Must be an image extension
   if (!/\.(png|jpg|jpeg|webp)(\?.*)?$/i.test(u)) return false;
-
-  // Filter out obvious noise
   if (u.includes("/icons/") || u.includes("/assets/icon")) return false;
-
   return true;
 }
 
@@ -190,13 +197,9 @@ function pickBestHeroCandidate(urls) {
     if (/logo/i.test(u)) s -= 50;
     if (/icon/i.test(u)) s -= 25;
     if (/thumbnail/i.test(u)) s -= 10;
-
-    // Boost things that look like hero images
     if (/\/hero20\d{6,}\//i.test(u)) s += 100;
-    if (/\/hero/i.test(u)) s += 40; // This will catch ".../hero/hero2x.png"
+    if (/\/hero/i.test(u)) s += 40; 
     if (/hero/i.test(u)) s += 10;
-    
-    // Boost preferred formats
     if (/\.png(\?|$)/i.test(u)) s += 5;
     if (/\.webp(\?|$)/i.test(u)) s += 4;
     if (/\.jpe?g(\?|$)/i.test(u)) s += 3;
@@ -213,46 +216,37 @@ async function dismissOverlays(page, preserveContent = false) {
     'button:has-text("Allow All")',
     'button[aria-label="Close"]', 
   ];
-
   const aggressiveCandidates = [
     '[data-testid="modalCloseButton"]',
     '[data-testid="modal"] button', 
     'div[class*="Modal-modalBackdrop"]'
   ];
-
   const candidates = preserveContent 
     ? safeCandidates 
     : [...safeCandidates, ...aggressiveCandidates];
 
   for (let i = 0; i < 3; i++) { 
     let didSomething = false;
-
-    // 1. Click buttons
     for (const sel of candidates) {
       try {
         const loc = page.locator(sel).first();
         if (await loc.isVisible().catch(() => false)) {
-          if (DEBUG) console.log(`[dismissOverlays] clicking: ${sel}`);
           await loc.click({ timeout: 1000, force: true }).catch(() => {});
           didSomething = true;
           await page.waitForTimeout(300);
         }
       } catch {}
     }
-
-    // 2. Escape key (only if NOT preserving content)
     if (!preserveContent) {
       try {
         const modalPresent = await page.locator('[data-testid="modal"]').isVisible().catch(() => false);
         if (modalPresent) {
-           if (DEBUG) console.log("[dismissOverlays] Modal detected. Pressing ESCAPE.");
            await page.keyboard.press("Escape");
            didSomething = true;
            await page.waitForTimeout(300);
         }
       } catch {}
     }
-
     if (!didSomething) break;
   }
 }
@@ -279,11 +273,7 @@ async function scrapeViaMerchantKey(merchantKey) {
 
     try {
       const url = ACCESSORIES_DETAILS_URL.replace("{merchantKey}", encodeURIComponent(merchantKey));
-      if (DEBUG) console.log("\n[KEY OPEN] merchantKey=", merchantKey, "url=", url);
-
       await page.goto(url, { waitUntil: "domcontentloaded" });
-      
-      // Preserve the modal content!
       await dismissOverlays(page, true);
 
       const deadline = Date.now() + 10000;
@@ -302,16 +292,9 @@ async function scrapeViaMerchantKey(merchantKey) {
         }
         await page.waitForTimeout(150);
       }
+      if (!heroUrl) heroUrl = pickBestHeroCandidate(promoCandidates);
 
-      if (DEBUG) console.log(`[KEY OPEN] DOM search finished. heroUrl=${heroUrl}`);
-
-      if (!heroUrl) {
-          if (DEBUG) console.log("[KEY OPEN] Checking network requests...");
-          heroUrl = pickBestHeroCandidate(promoCandidates);
-      }
-
-      const nameFromModal =
-        (await page.textContent('div[class*="detailCard__title"]').catch(() => null)) || null;
+      const nameFromModal = (await page.textContent('div[class*="detailCard__title"]').catch(() => null)) || null;
 
       const value = {
         heroUrl: heroUrl || null,
@@ -344,7 +327,6 @@ async function scrapeViaAccessoriesSearch(merchantName) {
     const browser = await getBrowser();
     const page = await browser.newPage();
     await page.setViewportSize({ width: 1440, height: 900 });
-
     const promoCandidates = [];
     let heroUrl = null;
     let displayName = null;
@@ -356,20 +338,11 @@ async function scrapeViaAccessoriesSearch(merchantName) {
     page.on("request", onRequest);
 
     try {
-      if (DEBUG) console.log("\n[UI SEARCH] Starting search fallback for:", merchantName);
-
       await page.goto(ACCESSORIES_URL, { waitUntil: "domcontentloaded" });
-      
-      // Kill overlays to type
       await dismissOverlays(page, false);
       
-      try {
-        await page.waitForSelector('[data-testid="modal"]', { state: 'detached', timeout: 3000 });
-      } catch {
-        if (DEBUG) console.log("[UI SEARCH] Warning: Modal might still be present.");
-      }
+      try { await page.waitForSelector('[data-testid="modal"]', { state: 'detached', timeout: 3000 }); } catch {}
 
-      // --- FIND SEARCH BAR ---
       let searchInput = null;
       await page.waitForSelector('#SearchBar', { state: 'attached', timeout: 10000 });
       
@@ -379,7 +352,6 @@ async function scrapeViaAccessoriesSearch(merchantName) {
         for (const input of inputs) {
             if (await input.isVisible()) {
                 searchInput = input;
-                if (DEBUG) console.log("[UI SEARCH] ✅ Found visible search bar");
                 break;
             }
         }
@@ -388,39 +360,21 @@ async function scrapeViaAccessoriesSearch(merchantName) {
       }
 
       if (!searchInput) {
-         if (DEBUG) console.log("[UI SEARCH] All search bars hidden. Attempting one last ESC press...");
          await page.keyboard.press("Escape");
          await page.waitForTimeout(500);
-         
          const inputs = await page.locator('#SearchBar').all();
-         for (const input of inputs) {
-             if (await input.isVisible()) {
-                 searchInput = input;
-                 break;
-             }
-         }
-         
+         for (const input of inputs) { if (await input.isVisible()) { searchInput = input; break; } }
          if (!searchInput) throw new Error("search_bar_not_interactable");
       }
 
-      // --- INTERACTION ---
-      try {
-        await searchInput.click();
-        await searchInput.clear();
-        
-        if (DEBUG) console.log(`[UI SEARCH] Typing "${merchantName}"...`);
-        await searchInput.pressSequentially(merchantName, { delay: 100 }); 
-        await page.waitForTimeout(1000); 
-
-        await searchInput.press("ArrowDown");
-        await page.waitForTimeout(500);
-      } catch (e) {
-        throw new Error(`interaction_failed: ${e.message}`);
-      }
-
+      await searchInput.click();
+      await searchInput.clear();
+      await searchInput.pressSequentially(merchantName, { delay: 100 }); 
+      await page.waitForTimeout(1000); 
+      await searchInput.press("ArrowDown");
+      await page.waitForTimeout(500);
       await dismissOverlays(page, false); 
 
-      // --- CLICK RESULT ---
       let optionClicked = false;
       const optionSelectors = [
         page.locator('[role="option"]').filter({ hasText: new RegExp(`^\\s*${merchantName}\\s*$`, "i") }).first(),
@@ -429,7 +383,6 @@ async function scrapeViaAccessoriesSearch(merchantName) {
 
       for (const option of optionSelectors) {
         if (await option.isVisible().catch(() => false)) {
-          if (DEBUG) console.log(`[UI SEARCH] Clicking option: "${await option.textContent()}"`);
           promoCandidates.length = 0; 
           await option.click();
           optionClicked = true;
@@ -440,7 +393,6 @@ async function scrapeViaAccessoriesSearch(merchantName) {
       if (!optionClicked) {
          const firstOpt = page.locator('[role="option"]').first();
          if (await firstOpt.isVisible()) {
-             if (DEBUG) console.log(`[UI SEARCH] Exact match failed. Clicking first option.`);
              promoCandidates.length = 0;
              await firstOpt.click();
              optionClicked = true;
@@ -453,33 +405,18 @@ async function scrapeViaAccessoriesSearch(merchantName) {
         return value;
       }
 
-      // --- HERO IMAGE SCRAPING ---
       const deadline = Date.now() + 12000;
       while (!heroUrl && Date.now() < deadline) {
-        const strategies = [
-           'img[class*="MerchantDetailsPage-hero"]',
-           'img[alt="hero"]',
-           'img[alt*="hero"]'
-        ];
-
+        const strategies = ['img[class*="MerchantDetailsPage-hero"]', 'img[alt="hero"]', 'img[alt*="hero"]'];
         for (const sel of strategies) {
             const src = await page.getAttribute(sel, "src").catch(() => null);
-            if (DEBUG && src) console.log(`[UI SEARCH] Found src via ${sel}: ${src}`);
-            if (src && isPromoImageUrl(src)) {
-                heroUrl = src;
-                break;
-            }
+            if (src && isPromoImageUrl(src)) { heroUrl = src; break; }
         }
-        
         if (heroUrl) break;
         await page.waitForTimeout(150);
       }
       
-      if (!heroUrl) {
-          if (DEBUG) console.log("[UI SEARCH] DOM scrape failed, checking network candidates...");
-          heroUrl = pickBestHeroCandidate(promoCandidates);
-      }
-
+      if (!heroUrl) heroUrl = pickBestHeroCandidate(promoCandidates);
       const title = (await page.textContent('div[class*="detailCard__title"]').catch(() => null)) || null;
       if (title && String(title).trim()) displayName = String(title).trim();
 
@@ -488,7 +425,6 @@ async function scrapeViaAccessoriesSearch(merchantName) {
       return value;
     } catch (e) {
       const value = { heroUrl: null, name: null, error: e?.message || String(e) };
-      if (DEBUG) console.log("[UI SEARCH] ERROR TRACE:", value.error);
       cache.set(ckey, { value, ts: Date.now() });
       return value;
     } finally {
@@ -498,11 +434,7 @@ async function scrapeViaAccessoriesSearch(merchantName) {
   })();
 
   inFlight.set(ckey, p);
-  try {
-    return await p;
-  } finally {
-    inFlight.delete(ckey);
-  }
+  try { return await p; } finally { inFlight.delete(ckey); }
 }
 
 async function lookupMerchant(queryName) {
@@ -510,89 +442,49 @@ async function lookupMerchant(queryName) {
   if (USE_MOCK) return mock;
 
   let scraped = null;
-  try {
-    scraped = await scrapeMerchant(queryName);
-  } catch (e) {
-    if (DEBUG) console.log("[lookupMerchant] scrapeMerchant failed:", e?.message || e);
-    scraped = null;
-  }
-
-  if (DEBUG) console.log("\n[lookupMerchant] queryName=", queryName, "scraped=", scraped);
+  try { scraped = await scrapeMerchant(queryName); } catch (e) { scraped = null; }
 
   if (!scraped) {
     const viaUI = await scrapeViaAccessoriesSearch(queryName);
-    return {
-      name: viaUI.name || queryName,
-      logoUrl: null,
-      heroUrl: viaUI.heroUrl || null,
-      merchantAri: null,
-      ...(DEBUG && viaUI.error ? { debugError: viaUI.error } : {}),
-    };
+    return { name: viaUI.name || queryName, logoUrl: null, heroUrl: viaUI.heroUrl || null, merchantAri: null };
   }
 
   const merchantKey = scraped.merchantKey || extractMerchantKeyFromLogoUrl(scraped.logoUrl) || null;
 
-  if (DEBUG) console.log("[lookupMerchant] merchantKey=", merchantKey, "logoUrl=", scraped.logoUrl);
-
   if (merchantKey) {
     const viaKey = await scrapeViaMerchantKey(merchantKey);
     if (viaKey.heroUrl) {
-      return {
-        name: viaKey.name || scraped.name || queryName,
-        logoUrl: scraped.logoUrl || null,
-        heroUrl: viaKey.heroUrl,
-        merchantAri: merchantKey,
-      };
+      return { name: viaKey.name || scraped.name || queryName, logoUrl: scraped.logoUrl || null, heroUrl: viaKey.heroUrl, merchantAri: merchantKey };
     }
     const viaUI = await scrapeViaAccessoriesSearch(scraped.name || queryName);
-    return {
-      name: viaUI.name || scraped.name || queryName,
-      logoUrl: scraped.logoUrl || null,
-      heroUrl: viaUI.heroUrl || null,
-      merchantAri: merchantKey,
-      ...(DEBUG && viaUI.error ? { debugError: viaUI.error } : {}),
-    };
+    return { name: viaUI.name || scraped.name || queryName, logoUrl: scraped.logoUrl || null, heroUrl: viaUI.heroUrl || null, merchantAri: merchantKey };
   }
 
   const viaUI = await scrapeViaAccessoriesSearch(scraped.name || queryName);
-  return {
-    name: viaUI.name || scraped.name || queryName,
-    logoUrl: scraped.logoUrl || null,
-    heroUrl: viaUI.heroUrl || null,
-    merchantAri: null,
-    ...(DEBUG && viaUI.error ? { debugError: viaUI.error } : {}),
-  };
+  return { name: viaUI.name || scraped.name || queryName, logoUrl: scraped.logoUrl || null, heroUrl: viaUI.heroUrl || null, merchantAri: null };
 }
 
 app.get("/lookup", async (req, res) => {
   const name = String(req.query.name || "").trim();
   if (!name) return res.status(400).json({ error: "Missing name query param" });
-
   try {
     const result = await lookupMerchant(name);
     return res.json(result);
   } catch (e) {
-    return res.status(500).json({
-      error: "lookup_failed",
-      message: e?.message || String(e),
-      name,
-      logoUrl: null,
-      heroUrl: null,
-    });
+    return res.status(500).json({ error: "lookup_failed", message: e?.message || String(e), name, logoUrl: null, heroUrl: null });
   }
 });
 
+/**
+ * UPDATED: Health check for the Figma UI heartbeat
+ */
 app.get("/health", (_, res) => res.json({ ok: true }));
 
 app.listen(PORT, () => {
-  console.log(`✅ Merchant lookup API running on http://localhost:${PORT}`);
-  console.log(`   USE_MOCK: ${USE_MOCK}`);
-  console.log(`   DEBUG: ${DEBUG}`);
+  console.log(`\n✅ Merchant helper is now running. Please keep this running to use the plugin.`);
 });
 
 process.on("SIGINT", async () => {
-  try {
-    if (sharedBrowser) await sharedBrowser.close();
-  } catch {}
+  try { if (sharedBrowser) await sharedBrowser.close(); } catch {}
   process.exit(0);
 });

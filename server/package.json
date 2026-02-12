@@ -1,17 +1,12 @@
 {
-  "name": "server",
+  "name": "merchant-helper",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "nodemon index.js",
-    "start": "node index.js"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "type": "module",
+  "bin": "dist/bundle.js",
+"scripts": {
+  "start": "node index.js",
+  "dev": "nodemon index.js"
+},
   "dependencies": {
     "cheerio": "^1.2.0",
     "cors": "^2.8.6",
@@ -20,6 +15,11 @@
     "playwright": "^1.58.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.11"
+    "esbuild": "^0.27.3",
+    "nodemon": "^3.1.11",
+    "pkg": "^5.8.1"
+  },
+  "pkg": {
+    "assets": []
   }
 }

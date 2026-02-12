@@ -36,7 +36,7 @@
         cursor: text;
         transition: border-color 0.2s;
         align-content: flex-start;
-        position: relative; /* For Clear button positioning */
+        position: relative;
       }
       .tag-container:focus-within {
         border-color: #18A0FB;
@@ -106,7 +106,7 @@
         background: none;
         border: none;
         padding: 0;
-        display: none; /* Hidden by default */
+        display: none; 
       }
       #clear-btn:hover { color: #d32f2f; }
       #clear-btn.visible { display: block; }
@@ -172,6 +172,28 @@
         box-sizing: border-box;
       }
 
+      /* Connection Status Indicator */
+      .status-footer {
+        margin-top: auto;
+        padding-top: 12px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        color: #666;
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #ccc; /* Default Gray */
+        transition: background 0.3s ease;
+      }
+
+      .status-dot.online { background: #00ca51; box-shadow: 0 0 4px #00ca51; }
+      .status-dot.offline { background: #f24822; box-shadow: 0 0 4px #f24822; }
+
       .run-text { margin: 0 4px; }
     </style>
   </head>
@@ -192,8 +214,18 @@
     </div>
 
     <div id="settings-panel">
-      <span class="settings-label">Server URL</span>
+      <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px;">
+        <span class="settings-label" style="margin-bottom: 0;">Server URL</span>
+        <div style="font-size: 10px; color: #999;">
+          Made for Affirm by <a href="https://www.anichauhan.com/" target="_blank" style="color: #18A0FB; text-decoration: none;">Ani Chauhan</a>
+        </div>
+      </div>
       <input id="serverBase" value="http://localhost:8787" placeholder="http://localhost:8787" />
+    </div>
+
+    <div class="status-footer">
+      <div id="status-dot" class="status-dot"></div>
+      <span id="status-text">Checking helper tool...</span>
     </div>
 
     <script>
@@ -205,19 +237,43 @@
       const settingsPanel = document.getElementById('settings-panel');
       const serverBaseEl = document.getElementById('serverBase');
       const runText = runBtn.querySelector('.run-text');
+      
+      const statusDot = document.getElementById('status-dot');
+      const statusText = document.getElementById('status-text');
 
       let tags = [];
       let isRunning = false;
+      let isServerOnline = false;
+
+      // --- Heartbeat Logic ---
+      async function checkConnection() {
+        const serverUrl = serverBaseEl.value.trim() || "http://localhost:8787";
+        try {
+          const res = await fetch(`${serverUrl}/health`, { method: 'GET', mode: 'cors' });
+          if (res.ok) {
+            statusDot.className = 'status-dot online';
+            statusText.innerHTML = 'Connected to helper tool'; 
+            isServerOnline = true;
+          } else { throw new Error(); }
+        } catch (e) {
+          statusDot.className = 'status-dot offline';
+          // Link to your site for the download
+          statusText.innerHTML = 'Please run helper tool.';
+          isServerOnline = false;
+        }
+      }
+
+      // Check immediately and then every 5 seconds
+      checkConnection();
+      setInterval(checkConnection, 5000);
 
       function updateUIState() {
-        // Toggle Clear button visibility
         if (tags.length > 0 && !isRunning) {
           clearBtn.classList.add('visible');
         } else {
           clearBtn.classList.remove('visible');
         }
 
-        // Toggle Placeholder Visibility
         if (tags.length > 0 || inputField.value.length > 0) {
           inputField.removeAttribute('placeholder');
         } else {
@@ -246,7 +302,6 @@
       }
 
       function addTag(text) {
-        // Remove commas, trim spaces
         const clean = text.replace(/,/g, '').trim();
         if (clean) {
           tags.push(clean);
@@ -265,7 +320,6 @@
         return null;
       }
 
-      // --- Clear Button Logic ---
       clearBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         tags = [];
@@ -274,29 +328,18 @@
         inputField.focus();
       });
 
-      // --- PASTE LOGIC (NEW) ---
       inputField.addEventListener('paste', (e) => {
         if (isRunning) { e.preventDefault(); return; }
-        
-        // Stop default paste (which would just put text in input)
         e.preventDefault();
-        
-        // Get text from clipboard
         const paste = (e.clipboardData || window.clipboardData).getData('text');
-        
-        // Split by comma
         const items = paste.split(',');
-        
-        // Add each as a tag
         items.forEach(item => {
             if (item.trim()) addTag(item);
         });
       });
 
-      // --- Input Event Listeners ---
       inputField.addEventListener('keydown', (e) => {
         if (isRunning) { e.preventDefault(); return; }
-
         if (e.key === 'Enter' || e.key === ',') {
           e.preventDefault();
           addTag(inputField.value);
@@ -337,8 +380,15 @@
       });
 
       runBtn.addEventListener('click', () => {
+        // SAFETY GUARD: Check connection before proceeding
+        if (!isServerOnline) {
+          alert("Please run helper tool before running the plugin.");
+          return;
+        }
+
         if (inputField.value.trim()) addTag(inputField.value);
         if (tags.length === 0) return;
+        
         startRun();
         parent.postMessage(
           { pluginMessage: { type: "RUN", merchants: tags, serverBase: serverBaseEl.value.trim() } },
@@ -388,9 +438,7 @@
       function updateTagStatus(index, status, errorMsg) {
         const tagEl = tagWrapper.querySelector(`.tag[data-index="${index}"]`);
         if (!tagEl) return;
-
         tagEl.className = 'tag'; 
-
         if (status === 'fetching' || status === 'populating') {
           tagEl.classList.add('loading');
         } else if (status === 'done') {
