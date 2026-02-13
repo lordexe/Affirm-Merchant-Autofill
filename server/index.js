@@ -11,6 +11,10 @@ const PORT = 8787;
 const USE_MOCK = process.env.USE_MOCK === "true";
 const DEBUG = process.env.DEBUG === "1" || process.env.DEBUG === "true";
 
+function logDebug(...args) {
+  if (DEBUG) console.log("[debug]", ...args);
+}
+
 const AFFIRM_SEARCH_URL_TEMPLATE =
   "https://www.affirm.com/api/marketplace/search/v2/public?query={query}&entity_type=merchants";
 
@@ -28,7 +32,7 @@ const buildMock = (name) => {
 };
 
 async function fetchJson(url) {
-  if (DEBUG) console.log("[fetchJson] GET", url);
+  logDebug("[fetchJson] GET", url);
 
   const res = await fetch(url, {
     headers: {
@@ -40,7 +44,10 @@ async function fetchJson(url) {
     },
   });
 
-  if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "<unable_to_read_response_body>");
+    throw new Error(`HTTP ${res.status} fetching ${url} body=${body.slice(0, 500)}`);
+  }
   return res.json();
 }
 
@@ -100,14 +107,7 @@ function pickMerchant(data, queryName = "") {
   const best = scored[0];
   if (!best) return null;
 
-  if (DEBUG) {
-    console.log("[pickMerchant] top candidates:");
-    scored.slice(0, 5).forEach((c, i) => {
-      console.log(
-        `  ${i + 1}. score=${c.score} name=${c.name} merchantKey=${c.merchantKey} logo=${c.logoUrl}`
-      );
-    });
-  }
+  logDebug("[pickMerchant] top candidates", scored.slice(0, 5));
 
   return {
     name: best.name,
@@ -123,10 +123,8 @@ async function scrapeMerchant(name) {
   const json = await fetchJson(url);
   const picked = pickMerchant(json, name);
 
-  if (DEBUG) {
-    console.log("[scrapeMerchant] query=", name);
-    console.log("[scrapeMerchant] picked=", picked);
-  }
+  logDebug("[scrapeMerchant] query=", name);
+  logDebug("[scrapeMerchant] picked=", picked);
 
   return picked;
 }
@@ -137,8 +135,16 @@ function extractMerchantKeyFromLogoUrl(logoUrl) {
   if (m && m[1]) return m[1];
   m = s.match(/\/merchants\/([A-Z0-9]+)\//i);
   if (m && m[1]) return m[1];
-  m = s.match(/\/merchant\/promos\/([A-Za-z0-9]+)\//);
-  if (m && m[1] && m[1].length >= 8) return m[1];
+  // Only extract from /merchant/promos/ if it looks like a valid ID (mostly uppercase, alphanumeric)
+  m = s.match(/\/merchant\/promos\/([A-Z0-9]{10,})\//);
+  if (m && m[1]) {
+    const key = m[1];
+    // Check if it's at least 50% uppercase (valid keys are mostly uppercase)
+    const upperCount = (key.match(/[A-Z]/g) || []).length;
+    if (upperCount >= key.length * 0.5) {
+      return key;
+    }
+  }
   return null;
 }
 
@@ -150,24 +156,24 @@ const TTL_MS = 12 * 60 * 60 * 1000;
 
 let sharedBrowser = null;
 
-/**
- * UPDATED: Robust Playwright launch for packaged Mac binary.
- * Points to the system Chrome to avoid heavy downloads.
- */
 async function getBrowser() {
-  if (sharedBrowser) return sharedBrowser;
+  if (sharedBrowser && sharedBrowser.isConnected()) return sharedBrowser;
   
   const macChromePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  const launchOptions = { 
+    headless: true, 
+    args: ['--no-sandbox', '--disable-setuid-sandbox'] 
+  };
   
   try {
     sharedBrowser = await chromium.launch({ 
-      headless: true,
+      ...launchOptions,
       executablePath: macChromePath
     });
-    if (DEBUG) console.log("✅ Playwright launched using system Chrome");
+    logDebug("✅ Playwright launched using system Chrome");
   } catch (err) {
-    console.warn("⚠️ System Chrome not found at standard path, attempting default launch...");
-    sharedBrowser = await chromium.launch({ headless: true });
+    logDebug("⚠️ System Chrome path failed, launching default Chromium...");
+    sharedBrowser = await chromium.launch(launchOptions);
   }
   
   return sharedBrowser;
@@ -183,12 +189,27 @@ function isPromoImageUrl(u) {
   if (!isCdn) return false;
   if (!/\.(png|jpg|jpeg|webp)(\?.*)?$/i.test(u)) return false;
   if (u.includes("/icons/") || u.includes("/assets/icon")) return false;
+  if (u.includes("/fallback/")) return false; // Reject Affirm's generic fallback images
   return true;
 }
 
-function pickBestHeroCandidate(urls) {
+function pickBestHeroCandidate(urls, merchantName = null) {
   if (!urls || urls.length === 0) return null;
   const uniq = Array.from(new Set(urls)).filter(Boolean);
+
+  // If we have a merchant name, strongly prefer images with that name in the URL
+  if (merchantName) {
+    const merchantSlug = merchantName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const matchingName = uniq.filter(u => {
+      const urlLower = u.toLowerCase().replace(/[^a-z0-9]/g, '');
+      return urlLower.includes(merchantSlug);
+    });
+    if (matchingName.length > 0) {
+      matchingName.sort((a, b) => score(b) - score(a));
+      return matchingName[0];
+    }
+  }
+
   uniq.sort((a, b) => score(b) - score(a));
   return uniq[0] || null;
 
@@ -198,8 +219,9 @@ function pickBestHeroCandidate(urls) {
     if (/icon/i.test(u)) s -= 25;
     if (/thumbnail/i.test(u)) s -= 10;
     if (/\/hero20\d{6,}\//i.test(u)) s += 100;
-    if (/\/hero/i.test(u)) s += 40; 
+    if (/\/hero/i.test(u)) s += 40;
     if (/hero/i.test(u)) s += 10;
+    if (/width=\d{3,}/i.test(u)) s += 20; // Prefer larger images
     if (/\.png(\?|$)/i.test(u)) s += 5;
     if (/\.webp(\?|$)/i.test(u)) s += 4;
     if (/\.jpe?g(\?|$)/i.test(u)) s += 3;
@@ -258,30 +280,34 @@ async function scrapeViaMerchantKey(merchantKey) {
   if (inFlight.has(ckey)) return inFlight.get(ckey);
 
   const p = (async () => {
-    const browser = await getBrowser();
-    const page = await browser.newPage();
-    await page.setViewportSize({ width: 1440, height: 900 });
-
-    const promoCandidates = [];
-    let heroUrl = null;
-
-    const onRequest = (req) => {
-      const u = req.url();
-      if (isPromoImageUrl(u)) promoCandidates.push(u);
-    };
-    page.on("request", onRequest);
-
+    let page;
     try {
+      const browser = await getBrowser();
+      page = await browser.newPage();
+      await page.setViewportSize({ width: 1440, height: 900 });
+
+      const promoCandidates = [];
+      let heroUrl = null;
+
+      const onRequest = (req) => {
+        const u = req.url();
+        if (isPromoImageUrl(u)) promoCandidates.push(u);
+      };
+      page.on("request", onRequest);
+
+      logDebug("[scrapeViaMerchantKey] start", { merchantKey });
       const url = ACCESSORIES_DETAILS_URL.replace("{merchantKey}", encodeURIComponent(merchantKey));
-      await page.goto(url, { waitUntil: "domcontentloaded" });
+      logDebug("[scrapeViaMerchantKey] goto", url);
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
       await dismissOverlays(page, true);
 
       const deadline = Date.now() + 10000;
       while (!heroUrl && Date.now() < deadline) {
         const strategies = [
-           'img[class*="MerchantDetailsPage-hero"]',
-           'img[alt="hero"]',
-           'img[alt*="hero"]'
+           'div[role="dialog"] img[class*="MerchantDetailsPage-hero"]',
+           'div[role="dialog"] img[alt="hero"]',
+           'div[class*="MerchantDetailsPage-modal"] img[alt="hero"]',
+           'div[class*="MerchantDetailsPage-modal"] img[class*="MerchantDetailsPage-hero"]'
         ];
         for (const sel of strategies) {
             const src = await page.getAttribute(sel, "src").catch(() => null);
@@ -292,7 +318,12 @@ async function scrapeViaMerchantKey(merchantKey) {
         }
         await page.waitForTimeout(150);
       }
-      if (!heroUrl) heroUrl = pickBestHeroCandidate(promoCandidates);
+
+      if (!heroUrl) {
+        const nameFromModal = (await page.textContent('div[class*="detailCard__title"]').catch(() => null)) || null;
+        const searchName = nameFromModal ? String(nameFromModal).trim() : null;
+        heroUrl = pickBestHeroCandidate(promoCandidates, searchName);
+      }
 
       const nameFromModal = (await page.textContent('div[class*="detailCard__title"]').catch(() => null)) || null;
 
@@ -301,11 +332,13 @@ async function scrapeViaMerchantKey(merchantKey) {
         name: nameFromModal ? String(nameFromModal).trim() : null,
       };
 
+      logDebug("[scrapeViaMerchantKey] result", value);
       cache.set(ckey, { value, ts: Date.now() });
       return value;
+    } catch (e) {
+      throw e;
     } finally {
-      page.off("request", onRequest);
-      await page.close().catch(() => {});
+      if (page) await page.close().catch(() => {});
     }
   })();
 
@@ -324,28 +357,34 @@ async function scrapeViaAccessoriesSearch(merchantName) {
   if (inFlight.has(ckey)) return inFlight.get(ckey);
 
   const p = (async () => {
-    const browser = await getBrowser();
-    const page = await browser.newPage();
-    await page.setViewportSize({ width: 1440, height: 900 });
-    const promoCandidates = [];
-    let heroUrl = null;
-    let displayName = null;
-
-    const onRequest = (req) => {
-      const u = req.url();
-      if (isPromoImageUrl(u)) promoCandidates.push(u);
-    };
-    page.on("request", onRequest);
-
+    let page;
     try {
-      await page.goto(ACCESSORIES_URL, { waitUntil: "domcontentloaded" });
+      const browser = await getBrowser();
+      page = await browser.newPage();
+      await page.setViewportSize({ width: 1440, height: 900 });
+      const promoCandidates = [];
+      let heroUrl = null;
+      let displayName = null;
+
+      const onRequest = (req) => {
+        const u = req.url();
+        if (isPromoImageUrl(u)) promoCandidates.push(u);
+      };
+      page.on("request", onRequest);
+
+      logDebug("[scrapeViaAccessoriesSearch] start", { merchantName });
+      await page.goto(ACCESSORIES_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
       await dismissOverlays(page, false);
-      
+
       try { await page.waitForSelector('[data-testid="modal"]', { state: 'detached', timeout: 3000 }); } catch {}
 
       let searchInput = null;
-      await page.waitForSelector('#SearchBar', { state: 'attached', timeout: 10000 });
-      
+      try {
+        await page.waitForSelector('#SearchBar', { state: 'attached', timeout: 10000 });
+      } catch (e) {
+        throw new Error("search_bar_not_found");
+      }
+
       const searchStart = Date.now();
       while (Date.now() - searchStart < 5000) {
         const inputs = await page.locator('#SearchBar').all();
@@ -367,10 +406,10 @@ async function scrapeViaAccessoriesSearch(merchantName) {
          if (!searchInput) throw new Error("search_bar_not_interactable");
       }
 
-      await searchInput.click();
-      await searchInput.clear();
-      await searchInput.pressSequentially(merchantName, { delay: 100 }); 
-      await page.waitForTimeout(1000); 
+      await searchInput.click({ timeout: 5000 });
+      await searchInput.clear({ timeout: 5000 });
+      await searchInput.pressSequentially(merchantName, { delay: 100 });
+      await page.waitForTimeout(1500);
       await searchInput.press("ArrowDown");
       await page.waitForTimeout(500);
       await dismissOverlays(page, false); 
@@ -383,8 +422,8 @@ async function scrapeViaAccessoriesSearch(merchantName) {
 
       for (const option of optionSelectors) {
         if (await option.isVisible().catch(() => false)) {
-          promoCandidates.length = 0; 
-          await option.click();
+          promoCandidates.length = 0;
+          await option.click({ timeout: 5000 });
           optionClicked = true;
           break;
         }
@@ -392,9 +431,9 @@ async function scrapeViaAccessoriesSearch(merchantName) {
 
       if (!optionClicked) {
          const firstOpt = page.locator('[role="option"]').first();
-         if (await firstOpt.isVisible()) {
+         if (await firstOpt.isVisible().catch(() => false)) {
              promoCandidates.length = 0;
-             await firstOpt.click();
+             await firstOpt.click({ timeout: 5000 });
              optionClicked = true;
          }
       }
@@ -407,29 +446,36 @@ async function scrapeViaAccessoriesSearch(merchantName) {
 
       const deadline = Date.now() + 12000;
       while (!heroUrl && Date.now() < deadline) {
-        const strategies = ['img[class*="MerchantDetailsPage-hero"]', 'img[alt="hero"]', 'img[alt*="hero"]'];
+        const strategies = [
+          'div[role="dialog"] img[class*="MerchantDetailsPage-hero"]',
+          'div[role="dialog"] img[alt="hero"]',
+          'div[class*="MerchantDetailsPage-modal"] img[alt="hero"]',
+          'div[class*="MerchantDetailsPage-modal"] img[class*="MerchantDetailsPage-hero"]'
+        ];
         for (const sel of strategies) {
             const src = await page.getAttribute(sel, "src").catch(() => null);
-            if (src && isPromoImageUrl(src)) { heroUrl = src; break; }
+            if (src && isPromoImageUrl(src)) {
+              heroUrl = src;
+              break;
+            }
         }
         if (heroUrl) break;
         await page.waitForTimeout(150);
       }
-      
-      if (!heroUrl) heroUrl = pickBestHeroCandidate(promoCandidates);
+
+      if (!heroUrl) heroUrl = pickBestHeroCandidate(promoCandidates, merchantName);
+
       const title = (await page.textContent('div[class*="detailCard__title"]').catch(() => null)) || null;
       if (title && String(title).trim()) displayName = String(title).trim();
 
       const value = { heroUrl: heroUrl || null, name: displayName || null };
+      logDebug("[scrapeViaAccessoriesSearch] result", value);
       cache.set(ckey, { value, ts: Date.now() });
       return value;
     } catch (e) {
-      const value = { heroUrl: null, name: null, error: e?.message || String(e) };
-      cache.set(ckey, { value, ts: Date.now() });
-      return value;
+      throw e;
     } finally {
-      page.off("request", onRequest);
-      await page.close().catch(() => {});
+      if (page) await page.close().catch(() => {});
     }
   })();
 
@@ -441,8 +487,14 @@ async function lookupMerchant(queryName) {
   const mock = buildMock(queryName);
   if (USE_MOCK) return mock;
 
+  logDebug("[lookupMerchant] start", { queryName });
+
   let scraped = null;
-  try { scraped = await scrapeMerchant(queryName); } catch (e) { scraped = null; }
+  try {
+    scraped = await scrapeMerchant(queryName);
+  } catch (e) {
+    scraped = null;
+  }
 
   if (!scraped) {
     const viaUI = await scrapeViaAccessoriesSearch(queryName);
@@ -453,9 +505,11 @@ async function lookupMerchant(queryName) {
 
   if (merchantKey) {
     const viaKey = await scrapeViaMerchantKey(merchantKey);
-    if (viaKey.heroUrl) {
+    // Only use the heroUrl from merchantKey if it's valid and not a fallback
+    if (viaKey.heroUrl && isPromoImageUrl(viaKey.heroUrl)) {
       return { name: viaKey.name || scraped.name || queryName, logoUrl: scraped.logoUrl || null, heroUrl: viaKey.heroUrl, merchantAri: merchantKey };
     }
+    // Fall back to UI search if merchantKey didn't give us a good hero image
     const viaUI = await scrapeViaAccessoriesSearch(scraped.name || queryName);
     return { name: viaUI.name || scraped.name || queryName, logoUrl: scraped.logoUrl || null, heroUrl: viaUI.heroUrl || null, merchantAri: merchantKey };
   }
@@ -467,21 +521,26 @@ async function lookupMerchant(queryName) {
 app.get("/lookup", async (req, res) => {
   const name = String(req.query.name || "").trim();
   if (!name) return res.status(400).json({ error: "Missing name query param" });
+
   try {
     const result = await lookupMerchant(name);
     return res.json(result);
   } catch (e) {
-    return res.status(500).json({ error: "lookup_failed", message: e?.message || String(e), name, logoUrl: null, heroUrl: null });
+    return res.status(500).json({ error: "lookup_failed", message: e?.message || String(e) });
   }
 });
 
-/**
- * UPDATED: Health check for the Figma UI heartbeat
- */
 app.get("/health", (_, res) => res.json({ ok: true }));
 
+app.post("/clear-cache", (_, res) => {
+  const cacheSize = cache.size;
+  cache.clear();
+  inFlight.clear();
+  return res.json({ ok: true, cleared: cacheSize });
+});
+
 app.listen(PORT, () => {
-  console.log(`\n✅ Merchant helper is now running. Please keep this running to use the plugin.`);
+  console.log(`✅ Merchant helper is now running. Please keep this running to use the Figma plugin`);
 });
 
 process.on("SIGINT", async () => {
