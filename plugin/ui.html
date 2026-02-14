@@ -157,7 +157,8 @@
         margin-top: 12px;
         padding-top: 12px;
         border-top: 1px solid #eee;
-        display: none; 
+        display: none;
+        padding-bottom: 12px;
       }
       #settings-panel.visible { display: block; }
       
@@ -172,10 +173,9 @@
         box-sizing: border-box;
       }
 
-      /* Connection Status Indicator */
-      .status-footer {
-        margin-top: auto;
-        padding-top: 12px;
+      /* Connection Status Indicator - Now at Top */
+      .status-header {
+        margin-bottom: 16px;
         display: flex;
         align-items: center;
         gap: 6px;
@@ -194,10 +194,146 @@
       .status-dot.online { background: #00ca51; box-shadow: 0 0 4px #00ca51; }
       .status-dot.offline { background: #f24822; box-shadow: 0 0 4px #f24822; }
 
+      /* Layer Names Container - Grouped UI */
+      .layer-names-container {
+        background: #f8f9fa;
+        border: 1px solid #e1e4e8;
+        border-radius: 6px;
+        padding: 12px;
+        margin-bottom: 16px;
+      }
+
+      .layer-names-header {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+
+      .layer-names-header svg {
+        width: 14px;
+        height: 14px;
+        color: #666;
+      }
+
+      .layer-names-description {
+        font-size: 10px;
+        color: #6c757d;
+        margin-bottom: 14px;
+        line-height: 1.4;
+      }
+
+      /* Layer Name Input Groups */
+      .layer-input-group {
+        margin-bottom: 8px;
+      }
+
+      .layer-input-group:last-child {
+        margin-bottom: 0;
+      }
+
+      .layer-label-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 4px;
+      }
+
+      .layer-label {
+        font-size: 11px;
+        font-weight: 500;
+        color: #495057;
+      }
+
+      /* Toggle Switch - Smaller */
+      .toggle-switch {
+        position: relative;
+        display: inline-block;
+        width: 26px;
+        height: 14px;
+      }
+
+      .toggle-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+
+      .toggle-slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ccc;
+        transition: 0.3s;
+        border-radius: 18px;
+      }
+
+      .toggle-slider:before {
+        position: absolute;
+        content: "";
+        height: 10px;
+        width: 10px;
+        left: 2px;
+        bottom: 2px;
+        background-color: white;
+        transition: 0.3s;
+        border-radius: 50%;
+      }
+
+      .toggle-switch input:checked + .toggle-slider {
+        background-color: #18A0FB;
+      }
+
+      .toggle-switch input:checked + .toggle-slider:before {
+        transform: translateX(12px);
+      }
+
+      .toggle-switch input:disabled + .toggle-slider {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .layer-input {
+        width: 100%;
+        padding: 7px 10px;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        font-size: 11px;
+        font-family: "Inter", sans-serif;
+        box-sizing: border-box;
+        color: #333;
+        background: white;
+        transition: all 0.2s;
+      }
+
+      .layer-input:hover {
+        border-color: #adb5bd;
+      }
+
+      .layer-input:focus {
+        outline: none;
+        border-color: #18A0FB;
+        box-shadow: 0 0 0 3px rgba(24, 160, 251, 0.1);
+      }
+
+      .layer-input::placeholder {
+        color: #adb5bd;
+        font-style: italic;
+      }
+
       .run-text { margin: 0 4px; }
     </style>
   </head>
   <body>
+
+    <!-- Connection Status at Top -->
+    <div class="status-header">
+      <div id="status-dot" class="status-dot"></div>
+      <span id="status-text">Checking helper tool...</span>
+    </div>
 
     <span class="input-label">Merchant names (comma separated)</span>
 
@@ -214,18 +350,65 @@
     </div>
 
     <div id="settings-panel">
-      <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px;">
-        <span class="settings-label" style="margin-bottom: 0;">Server URL</span>
-        <div style="font-size: 10px; color: #999;">
-          Made for Affirm by <a href="https://www.anichauhan.com/" target="_blank" style="color: #18A0FB; text-decoration: none;">Ani Chauhan</a>
+      <!-- Credits -->
+      <div style="font-size: 10px; color: #999; margin-bottom: 16px; text-align: center;">
+        Made for Affirm by <a href="https://www.anichauhan.com/" target="_blank" style="color: #18A0FB; text-decoration: none;">Ani Chauhan</a>
+      </div>
+
+      <!-- Layer Names Section - Grouped UI -->
+      <div class="layer-names-container">
+        <div class="layer-names-header">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 3h7v7H3z"/>
+            <path d="M14 3h7v7h-7z"/>
+            <path d="M14 14h7v7h-7z"/>
+            <path d="M3 14h7v7H3z"/>
+          </svg>
+          <span class="settings-label" style="margin-bottom: 0;">Layer Names</span>
+        </div>
+        <div class="layer-names-description">
+          Customize which layer names to look for in your cards
+        </div>
+
+        <div class="layer-input-group">
+          <div class="layer-label-row">
+            <label class="layer-label">Name Layer</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggleName" checked />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <input id="layerName" class="layer-input" placeholder="Merchant name" />
+        </div>
+
+        <div class="layer-input-group">
+          <div class="layer-label-row">
+            <label class="layer-label">Logo Layer</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggleLogo" checked />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <input id="layerLogo" class="layer-input" placeholder="Logo" />
+        </div>
+
+        <div class="layer-input-group">
+          <div class="layer-label-row">
+            <label class="layer-label">Image Layer</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggleHero" checked />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <input id="layerHero" class="layer-input" placeholder="Hero" />
         </div>
       </div>
-      <input id="serverBase" value="http://localhost:8787" placeholder="http://localhost:8787" />
-    </div>
 
-    <div class="status-footer">
-      <div id="status-dot" class="status-dot"></div>
-      <span id="status-text">Checking helper tool...</span>
+      <!-- Server URL -->
+      <div>
+        <span class="settings-label">Server URL</span>
+        <input id="serverBase" value="http://localhost:8787" placeholder="http://localhost:8787" />
+      </div>
     </div>
 
     <script>
@@ -237,9 +420,26 @@
       const settingsPanel = document.getElementById('settings-panel');
       const serverBaseEl = document.getElementById('serverBase');
       const runText = runBtn.querySelector('.run-text');
-      
+
       const statusDot = document.getElementById('status-dot');
       const statusText = document.getElementById('status-text');
+
+      // Layer name inputs
+      const layerNameEl = document.getElementById('layerName');
+      const layerLogoEl = document.getElementById('layerLogo');
+      const layerHeroEl = document.getElementById('layerHero');
+
+      // Layer toggles
+      const toggleNameEl = document.getElementById('toggleName');
+      const toggleLogoEl = document.getElementById('toggleLogo');
+      const toggleHeroEl = document.getElementById('toggleHero');
+
+      // Default layer names
+      const DEFAULT_LAYER_NAMES = {
+        name: 'Merchant name',
+        logo: 'Logo',
+        hero: 'Hero'
+      };
 
       let tags = [];
       let isRunning = false;
@@ -372,10 +572,71 @@
         }
       });
 
+      // Load saved settings
+      function loadSettings() {
+        const saved = localStorage.getItem('merchantAutofillSettings');
+        if (saved) {
+          try {
+            const settings = JSON.parse(saved);
+            serverBaseEl.value = settings.serverUrl || 'http://localhost:8787';
+            layerNameEl.value = settings.layerNames?.name || '';
+            layerLogoEl.value = settings.layerNames?.logo || '';
+            layerHeroEl.value = settings.layerNames?.hero || '';
+
+            // Load toggle states (default to true if not saved)
+            toggleNameEl.checked = settings.layerToggles?.name !== false;
+            toggleLogoEl.checked = settings.layerToggles?.logo !== false;
+            toggleHeroEl.checked = settings.layerToggles?.hero !== false;
+          } catch (e) {
+            console.error('Failed to load settings:', e);
+          }
+        }
+
+        // Set placeholders to defaults
+        layerNameEl.placeholder = DEFAULT_LAYER_NAMES.name;
+        layerLogoEl.placeholder = DEFAULT_LAYER_NAMES.logo;
+        layerHeroEl.placeholder = DEFAULT_LAYER_NAMES.hero;
+      }
+
+      // Save settings
+      function saveSettings() {
+        const settings = {
+          serverUrl: serverBaseEl.value.trim(),
+          layerNames: {
+            name: layerNameEl.value.trim(),
+            logo: layerLogoEl.value.trim(),
+            hero: layerHeroEl.value.trim()
+          },
+          layerToggles: {
+            name: toggleNameEl.checked,
+            logo: toggleLogoEl.checked,
+            hero: toggleHeroEl.checked
+          }
+        };
+        localStorage.setItem('merchantAutofillSettings', JSON.stringify(settings));
+      }
+
+      // Auto-save on input and toggle change
+      [serverBaseEl, layerNameEl, layerLogoEl, layerHeroEl].forEach(el => {
+        el.addEventListener('input', saveSettings);
+      });
+      [toggleNameEl, toggleLogoEl, toggleHeroEl].forEach(el => {
+        el.addEventListener('change', saveSettings);
+      });
+
+      // Resize plugin when settings toggle
       setupBtn.addEventListener('click', () => {
         settingsPanel.classList.toggle('visible');
-        if (settingsPanel.classList.contains('visible')) {
-            serverBaseEl.focus();
+        const isVisible = settingsPanel.classList.contains('visible');
+
+        // Resize the plugin (increased height for better grouped UI)
+        parent.postMessage(
+          { pluginMessage: { type: "RESIZE", height: isVisible ? 500 : 232 } },
+          "*"
+        );
+
+        if (isVisible) {
+          layerNameEl.focus();
         }
       });
 
@@ -388,10 +649,32 @@
 
         if (inputField.value.trim()) addTag(inputField.value);
         if (tags.length === 0) return;
-        
+
+        // Get layer names (use defaults if empty)
+        const layerNames = {
+          name: layerNameEl.value.trim() || DEFAULT_LAYER_NAMES.name,
+          logo: layerLogoEl.value.trim() || DEFAULT_LAYER_NAMES.logo,
+          hero: layerHeroEl.value.trim() || DEFAULT_LAYER_NAMES.hero
+        };
+
+        // Get layer toggle states
+        const layerToggles = {
+          name: toggleNameEl.checked,
+          logo: toggleLogoEl.checked,
+          hero: toggleHeroEl.checked
+        };
+
         startRun();
         parent.postMessage(
-          { pluginMessage: { type: "RUN", merchants: tags, serverBase: serverBaseEl.value.trim() } },
+          {
+            pluginMessage: {
+              type: "RUN",
+              merchants: tags,
+              serverBase: serverBaseEl.value.trim(),
+              layerNames: layerNames,
+              layerToggles: layerToggles
+            }
+          },
           "*"
         );
       });
@@ -472,6 +755,8 @@
         }
       };
       
+      // Initialize
+      loadSettings();
       updateUIState();
     </script>
   </body>

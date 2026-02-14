@@ -1,22 +1,44 @@
 // plugin/code.js
-figma.showUI(__html__, { width: 340, height: 220 });
+figma.showUI(__html__, { width: 340, height: 232 });
 
 figma.ui.onmessage = async (msg) => {
   if (!msg || !msg.type) return;
+
+  // Handle resize request
+  if (msg.type === "RESIZE") {
+    figma.ui.resize(340, msg.height);
+    return;
+  }
 
   if (msg.type === "RUN") {
     let serverRaw = (msg.serverBase || "http://localhost:8787").trim();
     if (!serverRaw.startsWith("http")) serverRaw = "http://" + serverRaw;
     const serverBase = serverRaw.replace(/\/$/, "");
 
-    const merchantNames = Array.isArray(msg.merchants) 
+    const merchantNames = Array.isArray(msg.merchants)
       ? msg.merchants.map(function(s) { return String(s).trim(); })
       : [];
 
+    // Get layer names (with defaults)
+    const layerNames = msg.layerNames || {
+      name: 'Merchant name',
+      logo: 'Logo',
+      hero: 'Hero'
+    };
+
+    // Get layer toggles (with defaults)
+    const layerToggles = msg.layerToggles || {
+      name: true,
+      logo: true,
+      hero: true
+    };
+
     console.log("🚀 Run started with merchants:", merchantNames);
+    console.log("🏷️  Using layer names:", layerNames);
+    console.log("🔘 Layer toggles:", layerToggles);
 
     const selection = figma.currentPage.selection;
-    const availableCards = findMerchantCardsInSelection(selection);
+    const availableCards = findMerchantCardsInSelection(selection, layerNames);
     const isCreationMode = availableCards.length === 0;
 
     if (isCreationMode) {
@@ -41,20 +63,22 @@ figma.ui.onmessage = async (msg) => {
       try {
         const url = serverBase + "/lookup?name=" + encodeURIComponent(merchantName);
         const res = await fetch(url);
-        
+
         if (!res.ok) {
           // Try to see if the server sent a specific error message in the body
           const errorBody = await res.text().catch(function() { return "No error body"; });
           console.error("Server Error Details:", errorBody);
-          
+
           // Custom message based on status
           if (res.status === 500) {
             throw new Error("Server crashed (500). Check your backend terminal logs.");
+          } else if (res.status === 504 || res.status === 408) {
+            throw new Error("Timed out trying to get asset");
           } else {
             throw new Error("HTTP " + res.status + ": " + res.statusText);
           }
         }
-        
+
         const data = await res.json();
 
         // FIX: Replaced optional chaining with logical AND checks
@@ -67,15 +91,24 @@ figma.ui.onmessage = async (msg) => {
 
         figma.ui.postMessage({ type: "STATUS", index: i, code: "POPULATE" });
 
+        let populateResult;
         if (isCreationMode) {
-            const newCard = await createMerchantCard(data, merchantName, i);
+            const newCard = await createMerchantCard(data, merchantName, i, layerNames, layerToggles);
             createdNodes.push(newCard);
+            populateResult = { success: true };
         } else {
             const targetCard = availableCards[i];
-            await populateCard(targetCard, data, merchantName);
+            populateResult = await populateCard(targetCard, data, merchantName, layerNames, layerToggles);
         }
 
-        figma.ui.postMessage({ type: "STATUS", index: i, code: "DONE" });
+        // Check if there were any layer-specific errors
+        if (populateResult && populateResult.errors && populateResult.errors.length > 0) {
+          const errorMsg = populateResult.errors.join(", ") + " not found";
+          figma.ui.postMessage({ type: "STATUS", index: i, code: "ERROR", error: errorMsg });
+          errorCount++;
+        } else {
+          figma.ui.postMessage({ type: "STATUS", index: i, code: "DONE" });
+        }
       } catch (e) {
         errorCount++;
         // FIX: Replaced e?.message with (e && e.message)
@@ -97,54 +130,77 @@ figma.ui.onmessage = async (msg) => {
 //              LOGIC HELPERS
 // ==========================================
 
-function findMerchantCardsInSelection(nodes) {
+function findMerchantCardsInSelection(nodes, layerNames) {
   if (!nodes || nodes.length === 0) return [];
   let results = [];
 
   for (const node of nodes) {
     const isGrid = node.name.toLowerCase().indexOf("grid") !== -1;
 
-    if (isMerchantCard(node) && !isGrid) {
+    if (isMerchantCard(node, layerNames) && !isGrid) {
       results.push(node);
     } else if ("children" in node) {
-      results = results.concat(findMerchantCardsInSelection(node.children));
+      results = results.concat(findMerchantCardsInSelection(node.children, layerNames));
     }
   }
   return sortNodesByPosition(results);
 }
 
-function isMerchantCard(node) {
+function isMerchantCard(node, layerNames) {
   if (!node || typeof node.findAll !== "function") return false;
-  
-  const hasLogo = node.findAll(function(n) { return n.name === "Logo"; }).length > 0;
-  const hasHero = node.findAll(function(n) { return n.name === "Hero"; }).length > 0;
-  
+
+  const hasLogo = node.findAll(function(n) { return n.name === layerNames.logo; }).length > 0;
+  const hasHero = node.findAll(function(n) { return n.name === layerNames.hero; }).length > 0;
+
   if (node.name.toLowerCase().indexOf("grid") !== -1) return false;
 
   return hasLogo && hasHero;
 }
 
-async function populateCard(card, data, fallbackName) {
-    const logoNode = card.findAll(function(n) { return n.name === "Logo"; })[0];
-    const heroNode = card.findAll(function(n) { return n.name === "Hero"; })[0];
-    
-    const nameTextNode = card.findAll(function(n) {
-      return n.type === "TEXT" && 
-      (n.name.toLowerCase().indexOf("name") !== -1 || n.name === "Merchant name");
-    })[0] || card.findAll(function(n) { 
-      return n.type === "TEXT" && n.name !== "Logo" && n.name !== "Hero"; 
-    })[0];
+async function populateCard(card, data, fallbackName, layerNames, layerToggles) {
+    const errors = [];
 
-    if (nameTextNode) {
+    // Only look for layers that are enabled
+    const logoNode = layerToggles.logo ? card.findAll(function(n) { return n.name === layerNames.logo; })[0] : null;
+    const heroNode = layerToggles.hero ? card.findAll(function(n) { return n.name === layerNames.hero; })[0] : null;
+
+    const nameTextNode = layerToggles.name ? (card.findAll(function(n) {
+      return n.type === "TEXT" &&
+      (n.name.toLowerCase().indexOf("name") !== -1 || n.name === layerNames.name);
+    })[0] || card.findAll(function(n) {
+      return n.type === "TEXT" && n.name !== layerNames.logo && n.name !== layerNames.hero;
+    })[0]) : null;
+
+    // Try to populate each enabled layer and track failures
+    if (layerToggles.name) {
+      if (nameTextNode) {
         await loadAllFontsForTextNode(nameTextNode);
         nameTextNode.characters = (data && data.name) || fallbackName;
+      } else {
+        errors.push("Name layer");
+      }
     }
-    
-    if (logoNode && data && data.logoUrl) await setNodeImageFill(logoNode, data.logoUrl);
-    if (heroNode && data && data.heroUrl) await setNodeImageFill(heroNode, data.heroUrl);
+
+    if (layerToggles.logo) {
+      if (logoNode && data && data.logoUrl) {
+        await setNodeImageFill(logoNode, data.logoUrl);
+      } else if (!logoNode) {
+        errors.push("Logo layer");
+      }
+    }
+
+    if (layerToggles.hero) {
+      if (heroNode && data && data.heroUrl) {
+        await setNodeImageFill(heroNode, data.heroUrl);
+      } else if (!heroNode) {
+        errors.push("Image layer");
+      }
+    }
+
+    return { success: errors.length === 0, errors: errors };
 }
 
-async function createMerchantCard(data, fallbackName, index) {
+async function createMerchantCard(data, fallbackName, index, layerNames, layerToggles) {
   const frame = figma.createFrame();
   frame.name = "Merchant Card";
   frame.resize(232, 340);
@@ -153,30 +209,37 @@ async function createMerchantCard(data, fallbackName, index) {
   frame.paddingLeft = 16; frame.paddingRight = 16; frame.paddingTop = 16; frame.paddingBottom = 16;
   frame.itemSpacing = 12;
   frame.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
-  
+
   const col = index % 4;
   const row = Math.floor(index / 4);
   frame.x = figma.viewport.center.x + (col * 256);
   frame.y = figma.viewport.center.y + (row * 380);
 
-  const hero = figma.createRectangle();
-  hero.name = "Hero";
-  hero.resize(200, 200);
-  hero.layoutAlign = "STRETCH";
-  if (data && data.heroUrl) await setNodeImageFill(hero, data.heroUrl);
-  frame.appendChild(hero);
+  // Only create layers that are enabled
+  if (layerToggles.hero) {
+    const hero = figma.createRectangle();
+    hero.name = layerNames.hero;
+    hero.resize(200, 200);
+    hero.layoutAlign = "STRETCH";
+    if (data && data.heroUrl) await setNodeImageFill(hero, data.heroUrl);
+    frame.appendChild(hero);
+  }
 
-  const logo = figma.createRectangle();
-  logo.name = "Logo";
-  logo.resize(50, 50);
-  if (data && data.logoUrl) await setNodeImageFill(logo, data.logoUrl);
-  frame.appendChild(logo);
+  if (layerToggles.logo) {
+    const logo = figma.createRectangle();
+    logo.name = layerNames.logo;
+    logo.resize(50, 50);
+    if (data && data.logoUrl) await setNodeImageFill(logo, data.logoUrl);
+    frame.appendChild(logo);
+  }
 
-  const text = figma.createText();
-  text.name = "Merchant name";
-  await figma.loadFontAsync({ family: "Inter", style: "Regular" });
-  text.characters = (data && data.name) || fallbackName;
-  frame.appendChild(text);
+  if (layerToggles.name) {
+    const text = figma.createText();
+    text.name = layerNames.name;
+    await figma.loadFontAsync({ family: "Inter", style: "Regular" });
+    text.characters = (data && data.name) || fallbackName;
+    frame.appendChild(text);
+  }
 
   return frame;
 }
