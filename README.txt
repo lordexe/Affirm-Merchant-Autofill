@@ -8,6 +8,13 @@ Merchant Autofill - Setup Instructions
    - If prompted with a security warning, click 'Open' anyway.
    - Keep the Terminal window open while using the plugin.
 
+   TROUBLESHOOTING: If macOS blocks the script with a security warning:
+   - Open Terminal
+   - Type: xattr -d com.apple.quarantine [path to RUN THIS.command]
+     TIP: To auto-fill the path, just drag 'RUN THIS.command' into Terminal
+   - Press Enter
+   - Now try right-clicking 'RUN THIS.command' again and select 'Open'
+
 3. LOAD THE PLUGIN IN FIGMA
    - In Figma, right click on a blank area.
    - From the context menu, select Plugins > Development > Import plugin from manifest...
@@ -15,10 +22,14 @@ Merchant Autofill - Setup Instructions
 
 4. USAGE INSTRUCTIONS
 
-   IMPORTANT: Layer names must be EXACTLY:
+   LAYER NAMES (Customizable):
+   By default, the plugin looks for these layer names:
    - "Hero" for hero image
    - "Logo" for logo image
    - "Merchant name" for merchant name
+
+   NOTE: You can customize these layer names in the plugin settings (gear icon)!
+   Also, use the toggles to control which layers to populate.
 
    SCENARIO 1: Populate Multiple Cards
    - Ensure your card layers have the exact names above.

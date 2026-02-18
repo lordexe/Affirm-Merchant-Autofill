@@ -1,8 +1,13 @@
 {
   "name": "Merchant Autofill",
-  "id": "merchant-autofill-dev",
+  "id": "1605836369789220276",
   "api": "1.0.0",
   "main": "code.js",
   "ui": "ui.html",
-  "editorType": ["figma"]
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["*"],
+    "reasoning": "Fetches merchant name, logo, and hero image from Affirm's public marketplace API."
+  }
 }

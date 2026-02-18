@@ -161,38 +161,8 @@
         padding-bottom: 12px;
       }
       #settings-panel.visible { display: block; }
-      
+
       .settings-label { font-size: 11px; font-weight: 600; color: #888; margin-bottom: 4px; display: block; }
-      #serverBase {
-        width: 100%;
-        padding: 6px 8px;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        font-size: 12px;
-        font-family: "Inter", sans-serif;
-        box-sizing: border-box;
-      }
-
-      /* Connection Status Indicator - Now at Top */
-      .status-header {
-        margin-bottom: 16px;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 11px;
-        color: #666;
-      }
-
-      .status-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: #ccc; /* Default Gray */
-        transition: background 0.3s ease;
-      }
-
-      .status-dot.online { background: #00ca51; box-shadow: 0 0 4px #00ca51; }
-      .status-dot.offline { background: #f24822; box-shadow: 0 0 4px #f24822; }
 
       /* Layer Names Container - Grouped UI */
       .layer-names-container {
@@ -329,12 +299,6 @@
   </head>
   <body>
 
-    <!-- Connection Status at Top -->
-    <div class="status-header">
-      <div id="status-dot" class="status-dot"></div>
-      <span id="status-text">Checking helper tool...</span>
-    </div>
-
     <span class="input-label">Merchant names (comma separated)</span>
 
     <div class="tag-container" id="tag-wrapper">
@@ -404,11 +368,6 @@
         </div>
       </div>
 
-      <!-- Server URL -->
-      <div>
-        <span class="settings-label">Server URL</span>
-        <input id="serverBase" value="http://localhost:8787" placeholder="http://localhost:8787" />
-      </div>
     </div>
 
     <script>
@@ -418,12 +377,7 @@
       const runBtn = document.getElementById('run');
       const setupBtn = document.getElementById('setup');
       const settingsPanel = document.getElementById('settings-panel');
-      const serverBaseEl = document.getElementById('serverBase');
       const runText = runBtn.querySelector('.run-text');
-
-      const statusDot = document.getElementById('status-dot');
-      const statusText = document.getElementById('status-text');
-
       // Layer name inputs
       const layerNameEl = document.getElementById('layerName');
       const layerLogoEl = document.getElementById('layerLogo');
@@ -443,29 +397,6 @@
 
       let tags = [];
       let isRunning = false;
-      let isServerOnline = false;
-
-      // --- Heartbeat Logic ---
-      async function checkConnection() {
-        const serverUrl = serverBaseEl.value.trim() || "http://localhost:8787";
-        try {
-          const res = await fetch(`${serverUrl}/health`, { method: 'GET', mode: 'cors' });
-          if (res.ok) {
-            statusDot.className = 'status-dot online';
-            statusText.innerHTML = 'Connected to helper tool'; 
-            isServerOnline = true;
-          } else { throw new Error(); }
-        } catch (e) {
-          statusDot.className = 'status-dot offline';
-          // Link to your site for the download
-          statusText.innerHTML = 'Please run helper tool.';
-          isServerOnline = false;
-        }
-      }
-
-      // Check immediately and then every 5 seconds
-      checkConnection();
-      setInterval(checkConnection, 5000);
 
       function updateUIState() {
         if (tags.length > 0 && !isRunning) {
@@ -572,36 +503,23 @@
         }
       });
 
-      // Load saved settings
-      function loadSettings() {
-        const saved = localStorage.getItem('merchantAutofillSettings');
-        if (saved) {
-          try {
-            const settings = JSON.parse(saved);
-            serverBaseEl.value = settings.serverUrl || 'http://localhost:8787';
-            layerNameEl.value = settings.layerNames?.name || '';
-            layerLogoEl.value = settings.layerNames?.logo || '';
-            layerHeroEl.value = settings.layerNames?.hero || '';
+      // Apply settings received from code.js (via figma.clientStorage)
+      function applySettings(settings) {
+        layerNameEl.value = settings.layerNames?.name || '';
+        layerLogoEl.value = settings.layerNames?.logo || '';
+        layerHeroEl.value = settings.layerNames?.hero || '';
+        toggleNameEl.checked = settings.layerToggles?.name !== false;
+        toggleLogoEl.checked = settings.layerToggles?.logo !== false;
+        toggleHeroEl.checked = settings.layerToggles?.hero !== false;
 
-            // Load toggle states (default to true if not saved)
-            toggleNameEl.checked = settings.layerToggles?.name !== false;
-            toggleLogoEl.checked = settings.layerToggles?.logo !== false;
-            toggleHeroEl.checked = settings.layerToggles?.hero !== false;
-          } catch (e) {
-            console.error('Failed to load settings:', e);
-          }
-        }
-
-        // Set placeholders to defaults
         layerNameEl.placeholder = DEFAULT_LAYER_NAMES.name;
         layerLogoEl.placeholder = DEFAULT_LAYER_NAMES.logo;
         layerHeroEl.placeholder = DEFAULT_LAYER_NAMES.hero;
       }
 
-      // Save settings
+      // Save settings via code.js
       function saveSettings() {
         const settings = {
-          serverUrl: serverBaseEl.value.trim(),
           layerNames: {
             name: layerNameEl.value.trim(),
             logo: layerLogoEl.value.trim(),
@@ -613,11 +531,11 @@
             hero: toggleHeroEl.checked
           }
         };
-        localStorage.setItem('merchantAutofillSettings', JSON.stringify(settings));
+        parent.postMessage({ pluginMessage: { type: 'SAVE_SETTINGS', settings } }, '*');
       }
 
       // Auto-save on input and toggle change
-      [serverBaseEl, layerNameEl, layerLogoEl, layerHeroEl].forEach(el => {
+      [layerNameEl, layerLogoEl, layerHeroEl].forEach(el => {
         el.addEventListener('input', saveSettings);
       });
       [toggleNameEl, toggleLogoEl, toggleHeroEl].forEach(el => {
@@ -631,7 +549,7 @@
 
         // Resize the plugin (increased height for better grouped UI)
         parent.postMessage(
-          { pluginMessage: { type: "RESIZE", height: isVisible ? 500 : 232 } },
+          { pluginMessage: { type: "RESIZE", height: isVisible ? 440 : 200 } },
           "*"
         );
 
@@ -641,23 +559,15 @@
       });
 
       runBtn.addEventListener('click', () => {
-        // SAFETY GUARD: Check connection before proceeding
-        if (!isServerOnline) {
-          alert("Please run helper tool before running the plugin.");
-          return;
-        }
-
         if (inputField.value.trim()) addTag(inputField.value);
         if (tags.length === 0) return;
 
-        // Get layer names (use defaults if empty)
         const layerNames = {
           name: layerNameEl.value.trim() || DEFAULT_LAYER_NAMES.name,
           logo: layerLogoEl.value.trim() || DEFAULT_LAYER_NAMES.logo,
           hero: layerHeroEl.value.trim() || DEFAULT_LAYER_NAMES.hero
         };
 
-        // Get layer toggle states
         const layerToggles = {
           name: toggleNameEl.checked,
           logo: toggleLogoEl.checked,
@@ -670,7 +580,6 @@
             pluginMessage: {
               type: "RUN",
               merchants: tags,
-              serverBase: serverBaseEl.value.trim(),
               layerNames: layerNames,
               layerToggles: layerToggles
             }
@@ -739,6 +648,10 @@
         const msg = event.data.pluginMessage;
         if (!msg) return;
 
+        if (msg.type === "SETTINGS_LOADED") {
+          applySettings(msg.settings || {});
+        }
+
         if (msg.type === "STATUS") {
             const map = {
                 'FETCH': 'fetching',
@@ -754,9 +667,8 @@
             finishRun(msg.errorCount || 0);
         }
       };
-      
+
       // Initialize
-      loadSettings();
       updateUIState();
     </script>
   </body>

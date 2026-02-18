@@ -8,11 +8,9 @@
   "dev": "nodemon --quiet index.js"
 },
   "dependencies": {
-    "cheerio": "^1.2.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
-    "node-fetch": "^3.3.2",
-    "playwright": "^1.58.1"
+    "node-fetch": "^3.3.2"
   },
   "devDependencies": {
     "esbuild": "^0.27.3",

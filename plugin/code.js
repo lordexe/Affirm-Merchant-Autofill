@@ -1,41 +1,40 @@
 // plugin/code.js
-figma.showUI(__html__, { width: 340, height: 232 });
+figma.showUI(__html__, { width: 340, height: 200 });
+
+// Send stored settings to UI on load
+figma.clientStorage.getAsync('merchantAutofillSettings').then(settings => {
+  figma.ui.postMessage({ type: 'SETTINGS_LOADED', settings: settings || {} });
+});
 
 figma.ui.onmessage = async (msg) => {
   if (!msg || !msg.type) return;
 
-  // Handle resize request
   if (msg.type === "RESIZE") {
     figma.ui.resize(340, msg.height);
     return;
   }
 
-  if (msg.type === "RUN") {
-    let serverRaw = (msg.serverBase || "http://localhost:8787").trim();
-    if (!serverRaw.startsWith("http")) serverRaw = "http://" + serverRaw;
-    const serverBase = serverRaw.replace(/\/$/, "");
+  if (msg.type === "SAVE_SETTINGS") {
+    figma.clientStorage.setAsync('merchantAutofillSettings', msg.settings);
+    return;
+  }
 
+  if (msg.type === "RUN") {
     const merchantNames = Array.isArray(msg.merchants)
       ? msg.merchants.map(function(s) { return String(s).trim(); })
       : [];
 
-    // Get layer names (with defaults)
     const layerNames = msg.layerNames || {
       name: 'Merchant name',
       logo: 'Logo',
       hero: 'Hero'
     };
 
-    // Get layer toggles (with defaults)
     const layerToggles = msg.layerToggles || {
       name: true,
       logo: true,
       hero: true
     };
-
-    console.log("🚀 Run started with merchants:", merchantNames);
-    console.log("🏷️  Using layer names:", layerNames);
-    console.log("🔘 Layer toggles:", layerToggles);
 
     const selection = figma.currentPage.selection;
     const availableCards = findMerchantCardsInSelection(selection, layerNames);
@@ -49,10 +48,10 @@ figma.ui.onmessage = async (msg) => {
 
     let errorCount = 0;
     let createdNodes = [];
-    
+
     for (let i = 0; i < merchantNames.length; i++) {
       const merchantName = merchantNames[i];
-      
+
       if (!isCreationMode && i >= availableCards.length) {
         figma.ui.postMessage({ type: "STATUS", index: i, code: "SKIPPED" });
         continue;
@@ -61,33 +60,7 @@ figma.ui.onmessage = async (msg) => {
       figma.ui.postMessage({ type: "STATUS", index: i, code: "FETCH" });
 
       try {
-        const url = serverBase + "/lookup?name=" + encodeURIComponent(merchantName);
-        const res = await fetch(url);
-
-        if (!res.ok) {
-          // Try to see if the server sent a specific error message in the body
-          const errorBody = await res.text().catch(function() { return "No error body"; });
-          console.error("Server Error Details:", errorBody);
-
-          // Custom message based on status
-          if (res.status === 500) {
-            throw new Error("Server crashed (500). Check your backend terminal logs.");
-          } else if (res.status === 504 || res.status === 408) {
-            throw new Error("Timed out trying to get asset");
-          } else {
-            throw new Error("HTTP " + res.status + ": " + res.statusText);
-          }
-        }
-
-        const data = await res.json();
-
-        // FIX: Replaced optional chaining with logical AND checks
-        console.log("✅ Lookup success for " + merchantName, {
-          resolvedName: (data && data.name) || null,
-          hasLogo: Boolean(data && data.logoUrl),
-          hasHero: Boolean(data && data.heroUrl),
-          merchantAri: (data && data.merchantAri) || null,
-        });
+        const data = await lookupMerchant(merchantName);
 
         figma.ui.postMessage({ type: "STATUS", index: i, code: "POPULATE" });
 
@@ -101,7 +74,6 @@ figma.ui.onmessage = async (msg) => {
             populateResult = await populateCard(targetCard, data, merchantName, layerNames, layerToggles);
         }
 
-        // Check if there were any layer-specific errors
         if (populateResult && populateResult.errors && populateResult.errors.length > 0) {
           const errorMsg = populateResult.errors.join(", ") + " not found";
           figma.ui.postMessage({ type: "STATUS", index: i, code: "ERROR", error: errorMsg });
@@ -111,7 +83,6 @@ figma.ui.onmessage = async (msg) => {
         }
       } catch (e) {
         errorCount++;
-        // FIX: Replaced e?.message with (e && e.message)
         const errorMessage = (e && e.message) || String(e);
         console.error("❌ Error for " + merchantName + ":", errorMessage);
         figma.ui.postMessage({ type: "STATUS", index: i, code: "ERROR", error: errorMessage });
@@ -125,6 +96,79 @@ figma.ui.onmessage = async (msg) => {
     figma.ui.postMessage({ type: "COMPLETE", errorCount: errorCount });
   }
 };
+
+// ==========================================
+//              AFFIRM API
+// ==========================================
+
+var CORS_PROXY = "https://api.codetabs.com/v1/proxy?quest=";
+var AFFIRM_API_BASE = "https://www.affirm.com/api";
+
+async function affirmFetch(url) {
+  const res = await fetch(CORS_PROXY + encodeURIComponent(url));
+  if (!res.ok) throw new Error("HTTP " + res.status + " from " + url);
+  return res.json();
+}
+
+async function lookupMerchant(merchantName) {
+  const query = encodeURIComponent(merchantName.trim());
+
+  // Step 1: Search → ARI + logo
+  const searchData = await affirmFetch(
+    AFFIRM_API_BASE + "/marketplace/search/v2/public?query=" + query + "&entity_type=merchants"
+  );
+
+  const moduleEntities = Array.isArray(searchData && searchData.modules)
+    ? searchData.modules.reduce(function(acc, m) {
+        return acc.concat(Array.isArray(m && m.entities) ? m.entities : []);
+      }, [])
+    : [];
+
+  if (!moduleEntities.length) throw new Error("No merchants found for: " + merchantName);
+
+  const queryLower = merchantName.trim().toLowerCase();
+
+  const scored = moduleEntities
+    .map(function(entity) {
+      var title = (entity && entity.title) || "";
+      var titleLower = title.toLowerCase();
+      var merchantAri = (entity && entity.action && entity.action.merchant_detail_page && entity.action.merchant_detail_page.merchant_ari) || null;
+      var iconUrl = (entity && entity.icon_url) || null;
+      var subtitle = (entity && entity.subtitle) || "";
+
+      var score = 0;
+      if (titleLower === queryLower) score += 100;
+      if (titleLower.indexOf(queryLower) !== -1) score += 50;
+      var queryWords = queryLower.split(/\s+/);
+      var titleWords = titleLower.split(/\s+/);
+      score += queryWords.filter(function(qw) {
+        return titleWords.some(function(tw) { return tw.indexOf(qw) !== -1; });
+      }).length * 20;
+      if (!merchantAri) score -= 1000;
+      if (iconUrl) score += 10;
+
+      return { title: title, merchantAri: merchantAri, iconUrl: iconUrl, subtitle: subtitle, score: score };
+    })
+    .filter(function(item) { return item.merchantAri; })
+    .sort(function(a, b) { return b.score - a.score; });
+
+  if (!scored.length) throw new Error("No valid merchants found for: " + merchantName);
+
+  var best = scored[0];
+
+  // Step 2: Merchant details → hero image
+  var detailsData = await affirmFetch(
+    AFFIRM_API_BASE + "/marketplace/merchants/v2/public/" + encodeURIComponent(best.merchantAri) + "/details"
+  );
+
+  return {
+    name: best.title,
+    logoUrl: best.iconUrl || null,
+    heroUrl: (detailsData && detailsData.hero_image_url) || null,
+    merchantAri: best.merchantAri,
+    subtitle: best.subtitle || null,
+  };
+}
 
 // ==========================================
 //              LOGIC HELPERS
@@ -160,7 +204,6 @@ function isMerchantCard(node, layerNames) {
 async function populateCard(card, data, fallbackName, layerNames, layerToggles) {
     const errors = [];
 
-    // Only look for layers that are enabled
     const logoNode = layerToggles.logo ? card.findAll(function(n) { return n.name === layerNames.logo; })[0] : null;
     const heroNode = layerToggles.hero ? card.findAll(function(n) { return n.name === layerNames.hero; })[0] : null;
 
@@ -171,7 +214,6 @@ async function populateCard(card, data, fallbackName, layerNames, layerToggles) 
       return n.type === "TEXT" && n.name !== layerNames.logo && n.name !== layerNames.hero;
     })[0]) : null;
 
-    // Try to populate each enabled layer and track failures
     if (layerToggles.name) {
       if (nameTextNode) {
         await loadAllFontsForTextNode(nameTextNode);
@@ -215,7 +257,6 @@ async function createMerchantCard(data, fallbackName, index, layerNames, layerTo
   frame.x = figma.viewport.center.x + (col * 256);
   frame.y = figma.viewport.center.y + (row * 380);
 
-  // Only create layers that are enabled
   if (layerToggles.hero) {
     const hero = figma.createRectangle();
     hero.name = layerNames.hero;
