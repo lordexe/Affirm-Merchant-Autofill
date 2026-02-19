@@ -6,6 +6,10 @@ figma.clientStorage.getAsync('merchantAutofillSettings').then(settings => {
   figma.ui.postMessage({ type: 'SETTINGS_LOADED', settings: settings || {} });
 });
 
+// Image resize request queue — ui.html handles Canvas resizing and posts bytes back
+var _imageRequestId = 0;
+var _pendingImageRequests = new Map();
+
 figma.ui.onmessage = async (msg) => {
   if (!msg || !msg.type) return;
 
@@ -16,6 +20,19 @@ figma.ui.onmessage = async (msg) => {
 
   if (msg.type === "SAVE_SETTINGS") {
     figma.clientStorage.setAsync('merchantAutofillSettings', msg.settings);
+    return;
+  }
+
+  if (msg.type === "IMAGE_RESIZED") {
+    var pending = _pendingImageRequests.get(msg.requestId);
+    if (pending) {
+      _pendingImageRequests.delete(msg.requestId);
+      if (msg.error) {
+        pending.reject(new Error(msg.error));
+      } else {
+        pending.resolve(msg.bytes);
+      }
+    }
     return;
   }
 
@@ -33,7 +50,8 @@ figma.ui.onmessage = async (msg) => {
     const layerToggles = msg.layerToggles || {
       name: true,
       logo: true,
-      hero: true
+      hero: true,
+      replaceVectorLogo: false
     };
 
     const selection = figma.currentPage.selection;
@@ -85,6 +103,7 @@ figma.ui.onmessage = async (msg) => {
         errorCount++;
         const errorMessage = (e && e.message) || String(e);
         console.error("❌ Error for " + merchantName + ":", errorMessage);
+        figma.notify(merchantName + ": " + errorMessage, { error: true });
         figma.ui.postMessage({ type: "STATUS", index: i, code: "ERROR", error: errorMessage });
       }
     }
@@ -181,10 +200,16 @@ function findMerchantCardsInSelection(nodes, layerNames) {
   for (const node of nodes) {
     const isGrid = node.name.toLowerCase().indexOf("grid") !== -1;
 
-    if (isMerchantCard(node, layerNames) && !isGrid) {
+    if ("children" in node) {
+      // Always recurse first — prefer inner cards over treating a container as a card
+      const childCards = findMerchantCardsInSelection(node.children, layerNames);
+      if (childCards.length > 0) {
+        results = results.concat(childCards);
+      } else if (isMerchantCard(node, layerNames) && !isGrid) {
+        results.push(node);
+      }
+    } else if (isMerchantCard(node, layerNames) && !isGrid) {
       results.push(node);
-    } else if ("children" in node) {
-      results = results.concat(findMerchantCardsInSelection(node.children, layerNames));
     }
   }
   return sortNodesByPosition(results);
@@ -225,7 +250,12 @@ async function populateCard(card, data, fallbackName, layerNames, layerToggles) 
 
     if (layerToggles.logo) {
       if (logoNode && data && data.logoUrl) {
-        await setNodeImageFill(logoNode, data.logoUrl);
+        if (layerToggles.replaceVectorLogo && 'children' in logoNode) {
+          // component instances don't allow child removal — hide instead
+          for (const child of logoNode.children) { child.visible = false; }
+        }
+        try { await setNodeImageFill(logoNode, data.logoUrl); }
+        catch (e) { errors.push("Logo image (fetch failed)"); }
       } else if (!logoNode) {
         errors.push("Logo layer");
       }
@@ -233,9 +263,12 @@ async function populateCard(card, data, fallbackName, layerNames, layerToggles) 
 
     if (layerToggles.hero) {
       if (heroNode && data && data.heroUrl) {
-        await setNodeImageFill(heroNode, data.heroUrl);
+        try { await setNodeImageFill(heroNode, data.heroUrl); }
+        catch (e) { errors.push("Hero image (fetch failed)"); }
       } else if (!heroNode) {
         errors.push("Image layer");
+      } else if (heroNode && (!data || !data.heroUrl)) {
+        errors.push("Hero image (no URL from API)");
       }
     }
 
@@ -308,9 +341,15 @@ async function loadAllFontsForTextNode(textNode) {
 }
 
 async function setNodeImageFill(node, imageUrl) {
-  try {
-    const bytes = await fetch(imageUrl).then(function(res) { return res.arrayBuffer(); });
-    const image = figma.createImage(new Uint8Array(bytes));
-    node.fills = [{ type: "IMAGE", imageHash: image.hash, scaleMode: "FILL" }];
-  } catch (e) { console.error("Fill Error:", e); }
+  const proxiedUrl = CORS_PROXY + encodeURIComponent(imageUrl);
+  const requestId = ++_imageRequestId;
+
+  // Delegate fetch + resize to ui.html (which has Canvas API); code.js has none
+  const bytes = await new Promise(function(resolve, reject) {
+    _pendingImageRequests.set(requestId, { resolve: resolve, reject: reject });
+    figma.ui.postMessage({ type: 'RESIZE_IMAGE', url: proxiedUrl, maxDim: 1200, requestId: requestId });
+  });
+
+  const image = figma.createImage(bytes);
+  node.fills = [{ type: "IMAGE", imageHash: image.hash, scaleMode: "FILL" }];
 }

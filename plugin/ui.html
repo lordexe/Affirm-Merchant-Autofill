@@ -195,7 +195,7 @@
 
       /* Layer Name Input Groups */
       .layer-input-group {
-        margin-bottom: 8px;
+        margin-bottom: 20px;
       }
 
       .layer-input-group:last-child {
@@ -295,6 +295,25 @@
       }
 
       .run-text { margin: 0 4px; }
+
+      .sub-option {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 10px;
+        color: #6c757d;
+        margin-top: 6px;
+        cursor: pointer;
+        user-select: none;
+      }
+      .sub-option input[type="checkbox"] {
+        width: 11px;
+        height: 11px;
+        margin: 0;
+        cursor: pointer;
+        accent-color: #18A0FB;
+        flex-shrink: 0;
+      }
     </style>
   </head>
   <body>
@@ -354,6 +373,10 @@
             </label>
           </div>
           <input id="layerLogo" class="layer-input" placeholder="Logo" />
+          <label class="sub-option">
+            <input type="checkbox" id="replaceVectorLogo" />
+            <span>Replace vector logo if present</span>
+          </label>
         </div>
 
         <div class="layer-input-group">
@@ -387,6 +410,7 @@
       const toggleNameEl = document.getElementById('toggleName');
       const toggleLogoEl = document.getElementById('toggleLogo');
       const toggleHeroEl = document.getElementById('toggleHero');
+      const replaceVectorLogoEl = document.getElementById('replaceVectorLogo');
 
       // Default layer names
       const DEFAULT_LAYER_NAMES = {
@@ -511,6 +535,7 @@
         toggleNameEl.checked = settings.layerToggles?.name !== false;
         toggleLogoEl.checked = settings.layerToggles?.logo !== false;
         toggleHeroEl.checked = settings.layerToggles?.hero !== false;
+        replaceVectorLogoEl.checked = settings.replaceVectorLogo === true;
 
         layerNameEl.placeholder = DEFAULT_LAYER_NAMES.name;
         layerLogoEl.placeholder = DEFAULT_LAYER_NAMES.logo;
@@ -528,8 +553,10 @@
           layerToggles: {
             name: toggleNameEl.checked,
             logo: toggleLogoEl.checked,
-            hero: toggleHeroEl.checked
-          }
+            hero: toggleHeroEl.checked,
+            replaceVectorLogo: replaceVectorLogoEl.checked
+          },
+          replaceVectorLogo: replaceVectorLogoEl.checked
         };
         parent.postMessage({ pluginMessage: { type: 'SAVE_SETTINGS', settings } }, '*');
       }
@@ -538,7 +565,7 @@
       [layerNameEl, layerLogoEl, layerHeroEl].forEach(el => {
         el.addEventListener('input', saveSettings);
       });
-      [toggleNameEl, toggleLogoEl, toggleHeroEl].forEach(el => {
+      [toggleNameEl, toggleLogoEl, toggleHeroEl, replaceVectorLogoEl].forEach(el => {
         el.addEventListener('change', saveSettings);
       });
 
@@ -549,7 +576,7 @@
 
         // Resize the plugin (increased height for better grouped UI)
         parent.postMessage(
-          { pluginMessage: { type: "RESIZE", height: isVisible ? 440 : 200 } },
+          { pluginMessage: { type: "RESIZE", height: isVisible ? 470 : 200 } },
           "*"
         );
 
@@ -571,7 +598,8 @@
         const layerToggles = {
           name: toggleNameEl.checked,
           logo: toggleLogoEl.checked,
-          hero: toggleHeroEl.checked
+          hero: toggleHeroEl.checked,
+          replaceVectorLogo: replaceVectorLogoEl.checked
         };
 
         startRun();
@@ -644,12 +672,45 @@
         }
       }
 
+      // Fetches an image URL, resizes it on a Canvas to maxDim px max dimension,
+      // then posts the JPEG bytes back to code.js as IMAGE_RESIZED.
+      async function resizeImage(url, maxDim, requestId) {
+        try {
+          const res = await fetch(url);
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const blob = await res.blob();
+          const bitmap = await createImageBitmap(blob);
+
+          const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+          const w = Math.round(bitmap.width * scale);
+          const h = Math.round(bitmap.height * scale);
+
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+          bitmap.close();
+
+          const outBlob = await new Promise(function(res, rej) {
+            canvas.toBlob(function(b) { b ? res(b) : rej(new Error('toBlob failed')); }, 'image/jpeg', 0.85);
+          });
+          const buf = await outBlob.arrayBuffer();
+          parent.postMessage({ pluginMessage: { type: 'IMAGE_RESIZED', requestId: requestId, bytes: new Uint8Array(buf) } }, '*');
+        } catch (e) {
+          parent.postMessage({ pluginMessage: { type: 'IMAGE_RESIZED', requestId: requestId, error: e.message || String(e) } }, '*');
+        }
+      }
+
       window.onmessage = (event) => {
         const msg = event.data.pluginMessage;
         if (!msg) return;
 
         if (msg.type === "SETTINGS_LOADED") {
           applySettings(msg.settings || {});
+        }
+
+        if (msg.type === "RESIZE_IMAGE") {
+          resizeImage(msg.url, msg.maxDim, msg.requestId);
         }
 
         if (msg.type === "STATUS") {
